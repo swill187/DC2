@@ -28,7 +28,7 @@ class DataCollectionSystem:
         self.thermocouple_task = None
         self.last_status_time = 0
         self.status_interval = 5
-        self.thermocouple_daq = None  # Add this line
+        self.thermocouple_daq = None  
         
         # Initialize LEM Box
         try:
