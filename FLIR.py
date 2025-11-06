@@ -198,7 +198,7 @@ def frame_reader(collector, stop_flag):
     """Thread function to continuously read frames."""
     while not stop_flag.is_set():
         collector.read_frame()
-        time.sleep(0.1)  # Adjust rate as needed
+        #time.sleep(0.1)  # Adjust rate as needed
 
 def start_flir_collection_thread(collector, stop_flag):
     """Start FLIR data collection using pre-initialized collector."""

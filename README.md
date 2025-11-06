@@ -13,3 +13,23 @@ Collects welding current and voltage data from a Miller LEM Box. Very little doc
 Collects image frames from a FLIR a50 thermal camera and save them in a .npy format. The FLIR can collect data in two modes which determine which temperature range that it is capturing. One mode captures temperatures from -20C to 173C while the other mode captures 173C to 1000C. To run this script, both the Spinnaker SDK and the Python wrapper for the Spinnaker SDK (PySpin) must be installed. The FLIR GigE camera drivers must also be installed.
 ## Xiris.py
 Collects image frames from a Xiris XIR-1800 SWIR HDR thermal camera. The Xiris WeldSDK is not available in Python, so to interface with it, XIR1800Collection.exe was developed in C++. Xiris.py is used to call XIR1800Collection.exe as a subprocess. It collects the image frames from the Xiris camera in the RAW file format (the option to collect PNG format images is also available with a modification to the C++ file). The filename for each frame is the timestamp at which it was collected on the system using the time since epoch format. The first 10 digits of the file name are the timestamp down to the second, and then the last six digits are microseconds. For example a file name of 1748448916666344.raw would correspond to Wednesday May 28, 2025 04:15:16.666344 PM in GMT. 
+
+# Installation
+To install DC2 on your machine, first clone the DC2 repository to your computer. To operate the FLIR and Xiris cameras, you will need an extra set of installer files from someone in the lab.
+
+## Install Dependencies to Target PC
+    - NI-DAQmx:                     https://www.ni.com/en/support/downloads/drivers/download.ni-daq-mx.html#577117
+    - DT-Open Layers for .NET:      https://digilent.com/reference/software/openlayers/start
+    - Xiris WeldSDK 2:              License Required (only necessary for Xiris Weld Camera)
+
+## Setup CMake for Compiling LEMBOX.exe & XIR1800Collection.exe (optional)
+    - Install Build Tools for Visual Studio 2022 (scroll down -> "Tools for Visual Studio" -> "Build Tools for Visual Studio 2022"): https://visualstudio.microsoft.com/downloads/?q=build+tools
+    - Install extensions for VS Code:
+        Cmake Tools
+        C/C++
+
+    To compile, use the newly installed CMake Tools tab on the left in VS Code. There should already be a CMake project in the DC2 repo. Press the "configure" button for the project, then the "build" button for the specific executable that you want to compile. Compiled executables are placed in DC2/out/build/def/Debug/ and need to be moved to the main DC2 directory to be executed by the DC2.py script.
+
+## Python Virtual Environment
+    1. If using the FLIR camera, copy the "spinnaker_python" *.whl file into the DC2/.setup/ directory. Otherwise, remove the "spinnaker_python" line from DC2/.setup/requirements.txt
+    2. create a new virtual environment in VS Code (press F1 -> "Python: Create Environment..." -> ".venv" -> "python 3.10.11" -> "setup/requirements.txt")

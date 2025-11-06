@@ -6,9 +6,8 @@
 #include <oldaapi.h>
 #include <time.h>
 #include <conio.h>
-#include "contadc.h"
+//#include "contadc.h"
 #include <sys/timeb.h>
-#include <process.h>
 #pragma comment(linker, "/subsystem:console")
 
 #define STRLEN 80        /* string size for general text manipulation   */
@@ -37,23 +36,12 @@ typedef struct tag_board {
 typedef BOARD* LPBOARD;
 
 // Configuration constants
-#define NUM_BUFFERS 240          // Double from 120
-#define SAMPLES_PER_BUFFER 4000  // Double from 2000
+#define NUM_BUFFERS 32
+#define SAMPLES_PER_BUFFER 1000
 #define NUM_CHANNELS 2
 #define VOLTAGE_CHANNEL 0
 #define CURRENT_CHANNEL 1
-#define FILE_BUFFER_SIZE 32768  // Increased from 16384
-#define QUEUE_SIZE 400000        // Double from 200000  // Size of sample queue
-#define MAX_SAMPLES_PER_WRITE 10000
-
-typedef struct {
-    ULNG sampleNumber;
-    double perfTime;
-    WORD voltageRaw;
-    DBL voltage;
-    WORD currentRaw;
-    DBL current;
-} SAMPLE_DATA;
+#define FILE_BUFFER_SIZE 8192
 
 typedef struct {
     ULNG sampleCount;
@@ -66,15 +54,6 @@ typedef struct {
     char writeBuffer[FILE_BUFFER_SIZE];
     size_t writeBufferPos;
     SYSTEMTIME baseTime;      // System time when acquisition started
-    HANDLE writerThread;
-    HANDLE queueMutex;
-    HANDLE queueNotEmpty;
-    HANDLE queueNotFull;
-    BOOL writerRunning;
-    SAMPLE_DATA* sampleQueue;
-    size_t queueHead;
-    size_t queueTail;
-    size_t queueCount;
 } ACQUISITION_STATE;
 
 // Global variables
@@ -93,26 +72,37 @@ BOOL InitializeBoard(void);
 BOOL ConfigureADC(void);
 BOOL ProcessAcquisition(void);
 DBL ConvertToVolts(WORD rawValue, UINT resolution, UINT encoding, DBL max, DBL min);
-static unsigned __stdcall WriterThreadFunc(void* arg);
-static BOOL QueueSample(SAMPLE_DATA* sample);
-static BOOL DequeueSample(SAMPLE_DATA* sample);
 
 // Replace GetSystemTimeString with this higher precision version
 static void GetPreciseTimeString(char* buffer, size_t bufferSize, double offsetSeconds) {
-    // Get the base time and add the precise offset
+    // Get the base time which is already in local time
     SYSTEMTIME time = acqState.baseTime;
     FILETIME fileTime;
-    SystemTimeToFileTime(&time, &fileTime);
+    
+    // Convert local time to FILETIME
+    if (!SystemTimeToFileTime(&time, &fileTime)) {
+        // Handle error - use a basic timestamp format
+        snprintf(buffer, bufferSize, "ERROR");
+        return;
+    }
+    
+    // Convert FILETIME to 100-nanosecond intervals since January 1, 1601
     ULONGLONG baseTime100ns = ((ULONGLONG)fileTime.dwHighDateTime << 32) | fileTime.dwLowDateTime;
     
-    // Add offset (convert to 100-nanosecond intervals)
+    // Add offset in 100-nanosecond intervals
     ULONGLONG offsetTime100ns = (ULONGLONG)(offsetSeconds * 10000000);
     ULONGLONG totalTime100ns = baseTime100ns + offsetTime100ns;
     
-    // Convert back to FILETIME/SYSTEMTIME
+    // Convert back to FILETIME
     fileTime.dwLowDateTime = (DWORD)totalTime100ns;
     fileTime.dwHighDateTime = (DWORD)(totalTime100ns >> 32);
-    FileTimeToSystemTime(&fileTime, &time);
+    
+    // Convert directly to local SYSTEMTIME
+    if (!FileTimeToSystemTime(&fileTime, &time)) {
+        // Handle error
+        snprintf(buffer, bufferSize, "ERROR");
+        return;
+    }
     
     // Format with microsecond precision
     snprintf(buffer, bufferSize,
@@ -132,19 +122,9 @@ static void InitializeAcquisitionState(void) {
     QueryPerformanceFrequency(&acqState.frequency);
     acqState.lastDisplayUpdate = GetTickCount();
     acqState.isRunning = TRUE;
-    GetSystemTime(&acqState.baseTime);
     
-    // Initialize thread synchronization
-    acqState.queueMutex = CreateMutex(NULL, FALSE, NULL);
-    acqState.queueNotEmpty = CreateEvent(NULL, TRUE, FALSE, NULL);
-    acqState.queueNotFull = CreateEvent(NULL, TRUE, TRUE, NULL);
-    
-    // Allocate sample queue
-    acqState.sampleQueue = (SAMPLE_DATA*)malloc(QUEUE_SIZE * sizeof(SAMPLE_DATA));
-    acqState.writerRunning = TRUE;
-    
-    // Create writer thread
-    acqState.writerThread = (HANDLE)_beginthreadex(NULL, 0, WriterThreadFunc, NULL, 0, NULL);
+    // Store the base system time in LOCAL time instead of UTC
+    GetLocalTime(&acqState.baseTime);  // Changed from GetSystemTime to GetLocalTime
 }
 
 // Open single data file
@@ -215,8 +195,6 @@ static void FlushWriteBuffer(void) {
 BOOL ProcessAcquisition(void) {
     HBUF hBuffer;
     DWORD currentTime;
-    LARGE_INTEGER currentPerfTime;
-    BOOL bufferProcessed = FALSE;
     
     while (acqState.isRunning) {
         if (_kbhit() && toupper(_getch()) == 'Q') {
@@ -224,20 +202,15 @@ BOOL ProcessAcquisition(void) {
             break;
         }
 
-        bufferProcessed = FALSE;
-        // Process all available buffers before yielding
-        while (olDaGetBuffer(board.hdass, &hBuffer) == OLNOERROR && hBuffer) {
+        // Get filled buffer
+        if (olDaGetBuffer(board.hdass, &hBuffer) == OLNOERROR && hBuffer) {
             PWORD samples;
             ULNG validSamples;
             
             if (olDmGetBufferPtr(hBuffer, (LPVOID*)&samples) == OLNOERROR &&
                 olDmGetValidSamples(hBuffer, &validSamples) == OLNOERROR) {
 
-                QueryPerformanceCounter(&currentPerfTime);
-                double baseTime = (double)(currentPerfTime.QuadPart - acqState.startTime.QuadPart) / 
-                                acqState.frequency.QuadPart;
-                
-                // Process samples in batch
+                // Process samples
                 for (ULNG i = 0; i < validSamples; i += NUM_CHANNELS) {
                     WORD voltageRaw = samples[i];
                     WORD currentRaw = samples[i + 1];
@@ -245,39 +218,23 @@ BOOL ProcessAcquisition(void) {
                     DBL voltage = ConvertToVolts(voltageRaw, 16, OL_ENC_BINARY, 10.0, -10.0);
                     DBL current = ConvertToVolts(currentRaw, 16, OL_ENC_BINARY, 10.0, -10.0);
                     
-                    SAMPLE_DATA sample;
-                    sample.sampleNumber = acqState.sampleCount++;
-                    // Calculate precise time for each sample based on its position in the buffer
-                    sample.perfTime = baseTime + ((double)i / (NUM_CHANNELS * 20000.0)); // Adjust for 20kHz sample rate
-                    sample.voltageRaw = voltageRaw;
-                    sample.voltage = voltage;
-                    sample.currentRaw = currentRaw;
-                    sample.current = current;
-                    
-                    while (!QueueSample(&sample) && acqState.isRunning) {
-                        Sleep(1); // Brief wait if queue is full
-                    }
+                    WriteBufferedSample(voltageRaw, voltage, currentRaw, current);
                 }
-                
-                bufferProcessed = TRUE;
+
+                // Display progress
+                currentTime = GetTickCount();
+                if ((currentTime - acqState.lastDisplayUpdate) >= 250) {  // Update 4x per second
+                    printf("\rSamples: %lu", acqState.sampleCount);
+                    fflush(stdout);
+                    acqState.lastDisplayUpdate = currentTime;
+                }
             }
             
-            // Immediately requeue the buffer
+            // Requeue the buffer
             olDaPutBuffer(board.hdass, hBuffer);
         }
         
-        // Update display less frequently to reduce overhead
-        currentTime = GetTickCount();
-        if ((currentTime - acqState.lastDisplayUpdate) >= 500) {  // Reduced from 250ms to 500ms
-            printf("\rSamples: %lu, Queue: %lu", acqState.sampleCount, acqState.queueCount);
-            fflush(stdout);
-            acqState.lastDisplayUpdate = currentTime;
-        }
-        
-        // Only sleep if no buffer was processed
-        if (!bufferProcessed) {
-            Sleep(1);
-        }
+        Sleep(1);  // Prevent tight loop
     }
     
     return TRUE;
@@ -358,84 +315,6 @@ DBL ConvertToVolts(WORD rawValue, UINT resolution, UINT encoding, DBL max, DBL m
     }
     
     return ((DBL)rawValue * (max - min)) / (1L << resolution) + min;
-}
-
-static unsigned __stdcall WriterThreadFunc(void* arg) {
-    SAMPLE_DATA sample;
-    char timeStamp[32];
-    size_t batchCount = 0;
-    const size_t BATCH_SIZE = 1000;  // Number of samples to write before flushing
-    
-    while (acqState.writerRunning || acqState.queueCount > 0) {
-        // Don't wait if there are samples available
-        if (WaitForSingleObject(acqState.queueNotEmpty, 1) == WAIT_OBJECT_0) {
-            while (DequeueSample(&sample)) {
-                GetPreciseTimeString(timeStamp, sizeof(timeStamp), sample.perfTime);
-                
-                fprintf(acqState.dataFile, "%lu,%.6f,%s,%04X,%.6f,%04X,%.6f\n",
-                        sample.sampleNumber,
-                        sample.perfTime,
-                        timeStamp,
-                        sample.voltageRaw,
-                        sample.voltage,
-                        sample.currentRaw,
-                        sample.current);
-                
-                if (++batchCount >= BATCH_SIZE) {
-                    fflush(acqState.dataFile);
-                    batchCount = 0;
-                }
-            }
-        }
-    }
-    
-    return 0;
-}
-
-static BOOL QueueSample(SAMPLE_DATA* sample) {
-    BOOL result = FALSE;
-    
-    WaitForSingleObject(acqState.queueMutex, INFINITE);
-    
-    if (acqState.queueCount < QUEUE_SIZE) {
-        acqState.sampleQueue[acqState.queueTail] = *sample;
-        acqState.queueTail = (acqState.queueTail + 1) % QUEUE_SIZE;
-        acqState.queueCount++;
-        
-        if (acqState.queueCount == 1) {
-            SetEvent(acqState.queueNotEmpty);
-        }
-        if (acqState.queueCount == QUEUE_SIZE) {
-            ResetEvent(acqState.queueNotFull);
-        }
-        result = TRUE;
-    }
-    
-    ReleaseMutex(acqState.queueMutex);
-    return result;
-}
-
-static BOOL DequeueSample(SAMPLE_DATA* sample) {
-    BOOL result = FALSE;
-    
-    WaitForSingleObject(acqState.queueMutex, INFINITE);
-    
-    if (acqState.queueCount > 0) {
-        *sample = acqState.sampleQueue[acqState.queueHead];
-        acqState.queueHead = (acqState.queueHead + 1) % QUEUE_SIZE;
-        acqState.queueCount--;
-        
-        if (acqState.queueCount == 0) {
-            ResetEvent(acqState.queueNotEmpty);
-        }
-        if (acqState.queueCount == QUEUE_SIZE - 1) {
-            SetEvent(acqState.queueNotFull);
-        }
-        result = TRUE;
-    }
-    
-    ReleaseMutex(acqState.queueMutex);
-    return result;
 }
 
 int main(int argc, char* argv[]) {

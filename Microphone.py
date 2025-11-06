@@ -7,10 +7,10 @@ import threading
 import time
 import os
 
-# Set recording parameters
-FORMAT = pyaudio.paFloat32 
+# Update recording parameters to match Microphone_csv_mod.py
+FORMAT = pyaudio.paFloat32  # Changed from paInt16
 CHANNELS = 1
-RATE = 48000  # 44100 is another common microphone sample rate
+RATE = 48000  # Changed from 44100
 CHUNK = 1024
 
 def find_microphone_by_name_and_api(name_pattern, api_id):
@@ -33,7 +33,7 @@ def find_microphone_by_name_and_api(name_pattern, api_id):
 def check_microphone():
     """Verify that the specific USB microphone is connected."""
     try:
-        index, dev_info = find_microphone_by_name_and_api("485B39", 1)  # 1 for DirectSound API
+        index, dev_info = find_microphone_by_name_and_api("485B39", 1)  # 1 for DirectSound
         return index is not None
     except Exception as e:
         print(f"Error checking microphone: {e}")
@@ -170,7 +170,7 @@ class MicrophoneRecorder:
             interpolated_times.extend(chunk_times)
             current_chunk_start = chunk_end
         
-        # Ensure the number of timestamps matches the number of samples
+        # Ensure we have the same number of timestamps as samples
         interpolated_times = interpolated_times[:len(audio_array)]
         relative_times = [t - start_time for t in interpolated_times]
         

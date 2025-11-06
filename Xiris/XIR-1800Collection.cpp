@@ -1,14 +1,13 @@
 #include <iostream>
 #include <memory>
 #include <sstream>
-#include "SampleCameraDetection.h"
-
 #include <string>
+#include <direct.h> 
+#include "SampleCameraDetection.h"
 #include "XirisCommon/XImage.h"
 #include "XImageLib/Image/XImageUtil.h"
-#include "XImageLib/Image/CRawImage.h"
-#include "XVideoRecorderLib/XVideoRecorder.h"
 #include "WeldSDK/WeldCamera.h"
+#include "XImageLib/Image/CRawImage.h" 
 
 class XirisCollector : public SampleCamera {
 private:
@@ -16,17 +15,18 @@ private:
     std::string outputPath;
     bool recordRaw;
     bool recordPng;
+    static std::shared_ptr<XirisCollector> instance;
 
 public:
-    XirisCollector(std::string ip, WeldSDK::CameraClass type) :  // Remove outPath parameter
+    XirisCollector(std::string ip, WeldSDK::CameraClass type) :  
         SampleCamera(ip, type),
         isRecording(false),
-        outputPath(""),                                          // Initialize with empty string
-        recordRaw(true),    // Enable RAW recording by default
-        recordPng(true)     // Enable PNG recording by default
+        outputPath(""),     
+        recordRaw(true),    
+        recordPng(true)     
     { }
 
-    void SetOutputPath(const std::string& path) {               // Add this method
+    void SetOutputPath(const std::string& path) {  
         outputPath = path;
     }
 
@@ -35,9 +35,21 @@ public:
         recordPng = png;
     }
 
+    static std::shared_ptr<XirisCollector> GetInstance() {
+        if (!instance) {
+            instance = std::shared_ptr<XirisCollector>(new XirisCollector("", WeldSDK::CameraClass::XVT1800));
+            if (instance) {
+                instance->Connect();  // Connect during initialization
+                std::cout << "Camera initialized and connected" << std::endl;
+            }
+        }
+        return instance;
+    }
+
     bool StartRecording() {
         if (!isRecording) {
             isRecording = true;
+            std::cout << "Recording started" << std::endl;
             return true;
         }
         return false;
@@ -52,20 +64,27 @@ public:
 
         const int frameNumber = args.MetaData.FrameCount;
 
+        // Create subdirectories for each format
         if (recordRaw) {
+            std::string rawDir = outputPath + "/raw";
+            _mkdir(rawDir.c_str());
             std::stringstream rawFileName;
-            rawFileName << outputPath << "/frame_" << frameNumber << ".raw";
+            rawFileName << rawDir << "/frame_" << frameNumber << ".raw";
             XImageLib::CRawImage raw(*args.RawImage);
             XImageLib::CRawImage::Save(raw, rawFileName.str().c_str());
         }
 
         if (recordPng) {
+            std::string pngDir = outputPath + "/png";
+            _mkdir(pngDir.c_str());
             std::stringstream pngFileName;
-            pngFileName << outputPath << "/frame_" << frameNumber << ".png";
+            pngFileName << pngDir << "/frame_" << frameNumber << ".png";
             XImageLib::XImageUtil::Save(*args.Image, pngFileName.str().c_str());
         }
     }
 };
+
+std::shared_ptr<XirisCollector> XirisCollector::instance;
 
 void PrintUsage() {
     std::cout << "Usage:\n"
@@ -86,42 +105,40 @@ int main(int argc, char* argv[]) {
     std::string command = argv[1];
     
     if (command == "--check") {
-        auto camera = DetectACamera<XirisCollector>();
+        auto camera = XirisCollector::GetInstance();
         return camera != nullptr ? 0 : 1;
     }
     else if (command == "--record" && argc >= 3) {
-        std::string outputPath = argv[2];
-        auto camera = DetectACamera<XirisCollector>();          // Remove extra parameters
+        auto camera = XirisCollector::GetInstance();
         if (camera) {
-            camera->SetOutputPath(outputPath);                   // Set the path after creation
+            std::string outputPath = argv[2];
+            camera->SetOutputPath(outputPath);
             
-            if (camera->Connect()) {
-                // Parse format options
-                bool rawEnabled = false;
-                bool pngEnabled = false;
+            // Parse format options
+            bool rawEnabled = false;
+            bool pngEnabled = false;
 
-                for (int i = 3; i < argc; i++) {
-                    std::string arg = argv[i];
-                    if (arg == "--raw") rawEnabled = true;
-                    else if (arg == "--png") pngEnabled = true;
-                }
+            for (int i = 3; i < argc; i++) {
+                std::string arg = argv[i];
+                if (arg == "--raw") rawEnabled = true;
+                else if (arg == "--png") pngEnabled = true;
+            }
 
-                if (!rawEnabled && !pngEnabled) {
-                    rawEnabled = true;
-                    pngEnabled = true;
-                }
+            if (!rawEnabled && !pngEnabled) {
+                rawEnabled = true;
+                pngEnabled = true;
+            }
 
-                camera->SetRecordingFormats(rawEnabled, pngEnabled);
-                
-                if (camera->StartRecording()) {
-                    std::cout << "Recording started with formats:\n"
-                             << (rawEnabled ? "- RAW\n" : "")
-                             << (pngEnabled ? "- PNG\n" : "")
-                             << "Press Ctrl+C to stop." << std::endl;
-                             
-                    while (true) {
-                        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                    }
+            camera->SetRecordingFormats(rawEnabled, pngEnabled);
+            
+            if (camera->StartRecording()) {
+                std::cout << "Recording started with formats:\n"
+                         << (rawEnabled ? "- RAW\n" : "")
+                         << (pngEnabled ? "- PNG\n" : "")
+                         << "Press Ctrl+C to stop." << std::endl;
+                         
+                while (true) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
                 }
             }
         }

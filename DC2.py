@@ -9,6 +9,8 @@ import threading
 from datetime import datetime
 import keyboard
 from tkinter import filedialog, Tk
+import psutil  
+import subprocess  # Added for subprocess.run
 
 # Update imports
 from RSI import ping_robot, start_collection, verify_connection
@@ -17,6 +19,7 @@ from Microphone import MicrophoneRecorder, check_microphone
 from LEMBox import LEMBoxCollector
 from FLIR import check_flir_connection, start_flir_collection_thread, FLIRCollector
 from threading import Event
+from Xiris import XirisCamera
 
 class DataCollectionSystem:
     def __init__(self):
@@ -26,9 +29,12 @@ class DataCollectionSystem:
         self.threads = []
         self.stop_flag = Event()
         self.thermocouple_task = None
+        
         self.last_status_time = 0
         self.status_interval = 5
-        self.thermocouple_daq = None  
+        self.thermocouple_daq = None
+        self.xiris = None
+        self.xiris_initialized = False
         
         # Initialize LEM Box
         try:
@@ -41,6 +47,13 @@ class DataCollectionSystem:
         self.microphone = None
         self.microphone_available = False
         self.flir_collector = None 
+
+        # Lower main process priority
+        try:
+            process = psutil.Process(os.getpid())
+            process.nice(psutil.BELOW_NORMAL_PRIORITY_CLASS if os.name == 'nt' else 10)
+        except Exception:
+            pass
 
     def verify_sensors(self):
         """Check which sensors are connected and available."""
@@ -101,19 +114,74 @@ class DataCollectionSystem:
         else:
             self.active_sensors['lembox'] = False
             print("✗ LEM Box not found")
+        
+        # Update Xiris camera check to use --detect
+        try:
+            executable = os.path.join(os.path.dirname(__file__), "XIR1800Collection.exe")
+            if not os.path.exists(executable):
+                print("✗ Xiris camera executable not found")
+                self.active_sensors['xiris'] = False
+            else:
+                # Run detect command
+                result = subprocess.run(
+                    [executable, "--detect"], 
+                    capture_output=True, 
+                    text=True,
+                    timeout=10
+                )
+                # Look for camera IP in output
+                camera_found = False
+                for line in result.stdout.splitlines():
+                    if "Detected camera with IP:" in line:
+                        camera_ip = line.split(":")[-1].strip()
+                        if camera_ip:
+                            camera_found = True
+                            print(f"✓ Xiris camera detected at {camera_ip}")
+                            break
+                
+                if not camera_found:
+                    print("✗ No Xiris camera detected")
+                    self.active_sensors['xiris'] = False
+                else:
+                    self.active_sensors['xiris'] = True
+                    
+        except Exception as e:
+            self.active_sensors['xiris'] = False
+            print(f"✗ Xiris camera check error: {e}")
             
         return any(self.active_sensors.values())
 
     def initialize_sensors(self):
-        """Initialize all active sensors before starting collection."""
-        if not hasattr(self, 'output_path'):
+        """Initialize all active sensors before starting collection."""        
+        if not self.output_path:
             print("Output path not set. Cannot initialize sensors.")
             return False
             
         print("\nInitializing sensors...")
         success = True
-        
-        # Initialize FLIR camera if active
+
+        # Initialize Xiris camera first
+        if self.active_sensors.get('xiris'):
+            try:
+                self.xiris = XirisCamera()
+                print("Connecting to Xiris camera...")
+                # Create Xiris subdirectory
+                xiris_path = os.path.join(self.output_path, "Xiris")
+                os.makedirs(xiris_path, exist_ok=True)
+                
+                if self.xiris.initialize(xiris_path) and self.xiris.start_streaming():
+                    print("Xiris camera initialized and streaming ✓")
+                    self.xiris_initialized = True
+                else:
+                    print("Xiris camera initialization failed ✗")
+                    self.active_sensors['xiris'] = False
+                    success = False
+            except Exception as e:
+                print(f"Error initializing Xiris camera: {e}")
+                self.active_sensors['xiris'] = False
+                success = False
+
+        # Initialize FLIR camera
         if self.active_sensors.get('flir'):
             try:
                 self.flir_collector = FLIRCollector()
@@ -126,9 +194,12 @@ class DataCollectionSystem:
                 print(f"Error initializing FLIR camera: {e}")
                 success = False
 
-        # Initialize Thermocouple DAQ if active
+        # Initialize Thermocouple DAQ
         if self.active_sensors.get('thermocouple'):
             try:
+                if hasattr(self, 'thermocouple_daq') and self.thermocouple_daq:
+                    self.thermocouple_daq.close()  
+                    
                 self.thermocouple_daq = ThermocoupleDAQ("cDAQ1Mod1", 3.5)
                 if self.thermocouple_daq.initialize():
                     print("Thermocouple initialized ✓")
@@ -149,40 +220,39 @@ class DataCollectionSystem:
         return success
 
     def print_status_update(self):
-        """Print periodic status updates during collection."""
+        """Print periodic status updates during collection."""        
         current_time = time.time()
         if current_time - self.last_status_time >= self.status_interval:
-            # Only print status if we're still collecting and threads are alive
             if self.is_collecting and any(thread.is_alive() for thread in self.threads):
                 print("\nStatus: Data collection active")
                 if self.active_sensors.get('thermocouple'):
                     print("  - Thermocouple recording: Active")
                 if self.active_sensors.get('microphone'):
                     print("  - Microphone recording: Active")
+                if self.active_sensors.get('xiris') and self.xiris and self.xiris.is_actually_recording():
+                    print("  - Xiris camera recording: Active")
                 self.last_status_time = current_time
             else:
-                # If we reach here during shutdown, help clean up
                 self.is_collecting = False
 
     def robot_collection(self):
         """Thread function for robot data collection."""
         try:
-            robot_file = os.path.join(self.output_path, "robot_data.csv")
+            robot_file = os.path.join(self.output_path, "robot_data.txt")
             print(f"Initializing robot data collection...")
             
             self.robot_data = start_collection(
-                mode='collect',
                 ip="192.168.1.25",
                 output_file=robot_file,
                 stop_flag=self.stop_flag,
-                skip_verify=True  # Skip verification since we already checked
+                skip_verify=True
             )
         except Exception as e:
             print(f"Error in robot collection: {e}")
-            self.stop_flag.set()  # Signal other threads to stop
+            self.stop_flag.set()
 
     def thermocouple_collection(self):
-        """Thread function for thermocouple data collection."""
+        """Thread function for thermocouple data collection."""        
         if not self.thermocouple_daq:
             return
             
@@ -194,7 +264,7 @@ class DataCollectionSystem:
             time.sleep(1/self.thermocouple_daq.sample_rate)
 
     def microphone_collection(self):
-        """Thread function for microphone data collection."""
+        """Thread function for microphone data collection."""        
         if not self.microphone_available or self.microphone is None:
             print("Specific USB microphone not available")
             return
@@ -209,7 +279,7 @@ class DataCollectionSystem:
                 self.microphone.stop_recording()
 
     def lembox_collection(self):
-        """Thread function for LEM Box data collection."""
+        """Thread function for LEM Box data collection."""        
         filename = os.path.join(self.output_path, "lembox_data.csv")
         
         if self.lembox.start_recording(filename):
@@ -220,8 +290,20 @@ class DataCollectionSystem:
             print("Stopping LEM Box recording...")
             self.lembox.stop_recording()
 
+    def xiris_collection(self):
+        """Thread function for Xiris camera recording."""
+        if not self.active_sensors.get('xiris') or not self.xiris:
+            return
+            
+        print("Starting Xiris camera recording...")
+        while self.is_collecting:
+            if not self.xiris.is_actually_recording():
+                print("Xiris recording stopped")
+                break
+            time.sleep(0.1)
+
     def prepare_collection(self):
-        """Prepare the system for data collection."""
+        """Prepare the system for data collection."""        
         # Create output directory with timestamp
         root = Tk()
         root.withdraw()
@@ -236,7 +318,7 @@ class DataCollectionSystem:
         os.makedirs(self.output_path, exist_ok=True)
         print(f"Data will be saved to: {self.output_path}")
 
-        # Initialize sensors
+        # Initialize all sensors
         if not self.initialize_sensors():
             print("Sensor initialization failed. Aborting...")
             return False
@@ -244,19 +326,35 @@ class DataCollectionSystem:
         return True
 
     def start_collection(self):
-        """Start data collection from all available sensors."""
+        """Start data collection from all available sensors."""        
         if not hasattr(self, 'output_path'):
             print("System not prepared. Run prepare_collection first.")
             return
 
         self.stop_flag.clear()
         
+        # Verify Xiris connection before starting
+        if self.active_sensors.get('xiris') and self.xiris:
+            if not self.xiris_initialized:
+                print("Attempting to reinitialize Xiris camera...")
+                if not self.xiris.initialize(self.output_path):
+                    print("Failed to initialize Xiris camera")
+                    return
+                
+            print("Starting Xiris recording...")
+            if not self.xiris.start_recording():
+                print("Failed to start Xiris recording")
+                return
+                
+            # Small delay to ensure recording starts
+            time.sleep(0.5)
+        
         # Start FLIR acquisition before setting collection flag
         if self.active_sensors.get('flir') and self.flir_collector:
             if not self.flir_collector.start_acquisition():
                 print("Failed to start FLIR acquisition. Aborting...")
                 return
-                
+        
         self.is_collecting = True
         print("\nRecording in progress. Press 'Q' to stop data collection.")
         
@@ -272,6 +370,8 @@ class DataCollectionSystem:
         if self.active_sensors.get('flir') and self.flir_collector:
             self.threads.append(threading.Thread(target=start_flir_collection_thread,
                                               args=(self.flir_collector, self.stop_flag)))
+        if self.active_sensors.get('xiris') and self.xiris:
+            self.threads.append(threading.Thread(target=self.xiris_collection))
 
         # Start all threads
         for thread in self.threads:
@@ -281,28 +381,45 @@ class DataCollectionSystem:
         while self.is_collecting:
             if keyboard.is_pressed('q'):
                 self.stop_collection()
-                break  # Add explicit break to exit loop immediately
+                break
             self.print_status_update()
             time.sleep(0.1)
 
     def stop_collection(self):
-        """Stop all data collection threads."""
+        """Stop all data collection threads."""        
         print("\nStopping data collection...")
         self.stop_flag.set()
         self.is_collecting = False
         
+        # Clean up thermocouple first
+        if hasattr(self, 'thermocouple_daq') and self.thermocouple_daq:
+            try:
+                self.thermocouple_daq.close()
+                self.thermocouple_daq = None
+            except Exception as e:
+                print(f"Error closing thermocouple: {e}")
+        
+        # Stop other threads
         for thread in self.threads:
             thread.join()
         self.threads.clear()
         
+        # Clean up other resources
+        if self.xiris:
+            self.xiris.stop_recording()
+        
         if hasattr(self, 'audio') and self.audio:
             self.audio.terminate()
             
-        # Clean up thermocouple
-        if self.thermocouple_daq:
-            self.thermocouple_daq.close()
-            
         print(f"Data collection complete. Files saved to: {self.output_path}")
+
+    def __del__(self):
+        """Ensure cleanup on object destruction."""
+        if hasattr(self, 'thermocouple_daq') and self.thermocouple_daq:
+            try:
+                self.thermocouple_daq.close()
+            except:
+                pass
 
 def main():
     # Initialize data collection system
@@ -332,6 +449,5 @@ if __name__ == "__main__":
 
 #TODO
 # 1. Fix timestamps in LEM Box data collection to match the other functions
-# 2. Add Xiris camera data collection
-# 3. Compile Python scripts with Cython as needed to improve performance
-# 4. Add a GUI to start and stop sensors, select output directory, and display status of sensors
+# 2. Compile Python scripts with Cython as needed to improve performance
+# 3. Add a GUI to start and stop sensors, select output directory, and display status of sensors

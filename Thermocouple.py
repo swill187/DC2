@@ -105,7 +105,6 @@ def print_temperature(temperatures, timestamp):
     """Print the temperature readings in a formatted way."""
     if temperatures is None:
         return
-        
     # Format time with microsecond precision
     current_time = datetime.fromtimestamp(timestamp)
     formatted_time = current_time.strftime('%Y-%m-%d %H:%M:%S.%f')
