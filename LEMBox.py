@@ -152,6 +152,8 @@ class LEMBoxCollector:
                 # Update last data time
                 self.last_data_time = time.time()
                 
+                # this is adding unwanted data that breaks lembox_scaling.py
+                """
                 # Store in circular buffer
                 self.buffer.append(output)
                 
@@ -163,6 +165,7 @@ class LEMBoxCollector:
                 # Force write every 100 lines
                 if len(self.buffer) % 100 == 0:
                     os.fsync(self.csv_file.fileno())
+                    """
                     
             except Exception as e:
                 self.logger.error(f"Error reading output: {e}")

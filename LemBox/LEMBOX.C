@@ -220,10 +220,7 @@ BOOL ProcessAcquisition(void) {
                     
                     WriteBufferedSample(voltageRaw, voltage, currentRaw, current);
                 }
-                
-                // These statements are being captured in lembox_data.csv, and this is causing issues with data parsing in post
-
-                /*
+                        
                 // Display progress
                 currentTime = GetTickCount();
                 if ((currentTime - acqState.lastDisplayUpdate) >= 250) {  // Update 4x per second
@@ -231,7 +228,7 @@ BOOL ProcessAcquisition(void) {
                     fflush(stdout);
                     acqState.lastDisplayUpdate = currentTime;
                 }
-                    */
+
             }
             
             // Requeue the buffer
