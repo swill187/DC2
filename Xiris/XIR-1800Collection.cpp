@@ -8,6 +8,7 @@
 #include "XImageLib/Image/XImageUtil.h"
 #include "WeldSDK/WeldCamera.h"
 #include "XImageLib/Image/CRawImage.h" 
+#include "XImageLib/Image/CXImage.h"
 
 class XirisCollector : public SampleCamera {
 private:
@@ -79,6 +80,7 @@ public:
             _mkdir(pngDir.c_str());
             std::stringstream pngFileName;
             pngFileName << pngDir << "/frame_" << frameNumber << ".png";
+            XImageLib::CXImage::CXImage(*args.Image);
             XImageLib::XImageUtil::Save(*args.Image, pngFileName.str().c_str());
         }
     }
