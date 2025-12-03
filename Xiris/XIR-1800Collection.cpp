@@ -164,12 +164,13 @@ public:
     }
 
     static std::shared_ptr<XirisCollector> DetectCamera() {
-        std::cout << "Starting camera detection..." << std::endl;
+        //std::cout << "Starting camera detection..." << std::endl;
         auto camera = DetectACamera<XirisCollector>();
         if (camera) {
             // Store IP immediately when detected
             camera->connectedIP = camera->IPAddress();
-            std::cout << "Detected camera with IP: " << camera->connectedIP << std::endl;
+            //std::cout << "Detected camera with IP: " << camera->connectedIP << std::endl;
+            std::cout << "\nDetected camera with IP: " << camera->IPAddress() << std::endl;
             return camera;
         }
         std::cout << "No camera detected" << std::endl;
