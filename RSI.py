@@ -7,6 +7,7 @@ from datetime import datetime
 import os
 from threading import Event
 from typing import List, Tuple
+import xml.etree.ElementTree as ET
 
 # Global flag for graceful shutdown
 running = True
@@ -57,11 +58,21 @@ def collect_raw_data(ip="192.168.1.25", port=59152, stop_flag=None) -> List[Tupl
                 # Get timestamp immediately after receiving data
                 current_time = time.perf_counter()
                 relative_time = current_time - start_time
+
+                data_str = data.decode('utf-8')
+
+
+                root = ET.fromstring(data_str)
+                ipoc = root.find('IPOC')
+
+                print(ipoc)
+
+
                 
                 if not raw_data:
                     print("First data point received! Collection started.")
                 
-                raw_data.append((data.decode('utf-8'), time.time(), relative_time))
+                raw_data.append((data_str, time.time(), relative_time))
                 
                 if current_time - last_report > 2:
                     print(f"Collected {len(raw_data)} data points...")
