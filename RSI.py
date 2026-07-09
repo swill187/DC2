@@ -39,16 +39,16 @@ def verify_connection(ip="192.168.1.25", port=59152):
     except Exception as e:
         return False, f"Connection error: {str(e)}"
 
-def collect_raw_data(ip="192.168.1.25", port=59152, stop_flag=None) -> List[Tuple[str, float, float]]:
+def collect_raw_data(recv_ip="192.168.1.25", send_ip="192.168.1.147", recv_port=59152, send_port=534533, stop_flag=None, send_flag=False) -> List[Tuple[str, float, float]]:
     """Collect raw XML data with absolute and relative timestamps until stopped"""
     raw_data = []
     start_time = time.perf_counter() 
     
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-        s.bind((ip, port))
-        s.connect(("192.168.1.147", 53453))                                 # CONNECT TO ROBOT FOR UDP SEND (IP and port should be args of collect_raw_data)
+        s.bind((recv_ip, recv_port))
+        if send_flag: s.connect((send_ip, send_port))   # CONNECT TO ROBOT FOR UDP SEND (IP and port should be args of collect_raw_data)
         s.settimeout(0.1)
-        print(f"Listening on {ip}:{port}")
+        print(f"Listening on {recv_ip}:{recv_port}")
         last_report = time.perf_counter()
         
         print("Waiting for first data point...")
@@ -76,7 +76,7 @@ def collect_raw_data(ip="192.168.1.25", port=59152, stop_flag=None) -> List[Tupl
                 resp_root = response.close()                    # TreeBuilder returns root element
                         
                 print(ET.tostring(resp_root, encoding='utf-8'))                                     # PRINT FOR DEBUG
-                s.send(ET.tostring(resp_root, encoding='utf-8'))                                    # send the constructed response string to the KUKA over socket
+                if send_flag: s.send(ET.tostring(resp_root, encoding='utf-8'))                      # send the constructed response string to the KUKA over socket
                 
                 #################################################################################
                 
