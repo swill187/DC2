@@ -39,14 +39,15 @@ def verify_connection(ip="192.168.1.25", port=59152):
     except Exception as e:
         return False, f"Connection error: {str(e)}"
 
-def collect_raw_data(recv_ip="192.168.1.25", send_ip="192.168.1.147", recv_port=59152, send_port=534533, stop_flag=None, send_flag=False) -> List[Tuple[str, float, float]]:
+def collect_raw_data(recv_ip="192.168.1.25", send_ip="192.168.1.147", recv_port=59152, send_port=53453, stop_flag=None, send_flag=False) -> List[Tuple[str, float, float]]:
     """Collect raw XML data with absolute and relative timestamps until stopped"""
     raw_data = []
     start_time = time.perf_counter() 
     
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        if send_flag: s.connect((send_ip, send_port))   # CONNECT TO ROBOT FOR UDP SEND
+        
         s.bind((recv_ip, recv_port))
-        if send_flag: s.connect((send_ip, send_port))   # CONNECT TO ROBOT FOR UDP SEND (IP and port should be args of collect_raw_data)
         s.settimeout(0.1)
         print(f"Listening on {recv_ip}:{recv_port}")
         last_report = time.perf_counter()
@@ -60,23 +61,25 @@ def collect_raw_data(recv_ip="192.168.1.25", send_ip="192.168.1.147", recv_port=
                 current_time = time.perf_counter()
                 relative_time = current_time - start_time
 
-                #################################################################################
                 data_str = data.decode('utf-8')                                                     # store recieved string as str, not byte array
+                
+                #################################################################################
+                if send_flag: 
+    
+                    root = ET.fromstring(data_str)                                                      # convert recieved string to xml tree object
+                    ipoc = root.find('IPOC')                                                            # recover IPOC (KUKA's internal timer) from recieved xml tree. This field needs to be sent in a return message to the robot
 
-                root = ET.fromstring(data_str)                                                      # convert recieved string to xml tree object
-                ipoc = root.find('IPOC')                                                            # recover IPOC (KUKA's internal timer) from recieved xml tree. This field needs to be sent in a return message to the robot
-
-                # construct our XML response with the TreeBuilder class. I have assumed that the robot wants to see <root><IPOC></IPOC>...</root>. This may take testing/manual deepdive to confirm
-                response = ET.TreeBuilder()
-                response.start(root.tag, root.attrib)           # add root
-                response.start(ipoc.tag, ipoc.attrib)           # add child
-                response.data(str(ipoc.text))                   # add child data
-                response.end(ipoc.tag)                          # we must close elements in hierarchical order
-                response.end(root.tag)
-                resp_root = response.close()                    # TreeBuilder returns root element
-                        
-                print(ET.tostring(resp_root, encoding='utf-8'))                                     # PRINT FOR DEBUG
-                if send_flag: s.send(ET.tostring(resp_root, encoding='utf-8'))                      # send the constructed response string to the KUKA over socket
+                    # construct our XML response with the TreeBuilder class. I have assumed that the robot wants to see <root><IPOC></IPOC>...</root>. This may take testing/manual deepdive to confirm
+                    response = ET.TreeBuilder()
+                    response.start(root.tag, root.attrib)           # add root
+                    response.start(ipoc.tag, ipoc.attrib)           # add child
+                    response.data(str(ipoc.text))                   # add child data
+                    response.end(ipoc.tag)                          # we must close elements in hierarchical order
+                    response.end(root.tag)
+                    resp_root = response.close()                    # TreeBuilder returns root element
+                            
+                    print(ET.tostring(resp_root, encoding='utf-8'))                                     # PRINT FOR DEBUG
+                    s.send(ET.tostring(resp_root, encoding='utf-8'))                      # send the constructed response string to the KUKA over socket
                 
                 #################################################################################
                 
