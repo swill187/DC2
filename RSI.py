@@ -145,7 +145,7 @@ def start_collection(ip="192.168.1.25", port=59152, output_file=None,
             return []
 
     print("Starting raw data collection...")
-    raw_data = collect_raw_data(ip, port, stop_flag)
+    raw_data = collect_raw_data(recv_ip=ip, recv_port=port, stop_flag=stop_flag)
     
     if raw_data and output_file:
         save_raw_data(raw_data, output_file)
