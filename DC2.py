@@ -1,8 +1,9 @@
 '''
 This version of the data collection script changes the order of operations to initiate data collection.
-Original:Run script> Press Enter > Select ouput directory > Initialize sensors > Start data collection (automatic)
+Original:Run script> Press Enter > Select output directory > Initialize sensors > Start data collection (automatic)
 This version: Run script > Press Enter > Select Output Directory > Initialize sensors > Press Enter > Start collection
 '''
+
 import os
 import time
 import threading
@@ -11,6 +12,7 @@ import keyboard
 from tkinter import filedialog, Tk
 import psutil  
 import subprocess  # Added for subprocess.run
+import zarr
 
 # Update imports
 from RSI import ping_robot, start_collection, verify_connection
@@ -21,20 +23,60 @@ from FLIR import check_flir_connection, start_flir_collection_thread, FLIRCollec
 from threading import Event
 from Xiris import XirisCamera
 
-class DataCollectionSystem:
-    def __init__(self):
-        self.output_path = None
-        self.is_collecting = False
-        self.active_sensors = {}
-        self.threads = []
-        self.stop_flag = Event()
-        self.thermocouple_task = None
+import DC2_helpers
+import sensors
+
+logger = DC2_helpers.init_logger(__name__)
+
+sensor_list = {sensors.thermocoupleDAQ}
         
-        self.last_status_time = 0
-        self.status_interval = 5
-        self.thermocouple_daq = None
-        self.xiris = None
-        self.xiris_initialized = False
+class DataCollectionSystem:
+    
+    def __init__(self, file_prefix = 'data_collection'):
+        
+        self.output_path = None
+        self.sensors = {}
+        self.file_prefix = file_prefix
+        
+    def test_connection(self):
+        
+        logger.debug('Testing sensor connections...')
+        
+        for expected_sensor in sensors:
+            
+            sensor = expected_sensor()
+            
+            try:
+                
+                sensor.verify()
+                self.sensors.add(sensor)
+                
+            except Exception as e:
+                logger.log(e)
+                
+    def initialize_collection(self):
+        
+        logger.debug('Initializing collection...')
+        
+        self.output_path = DC2_helpers.select_folder() / (self.file_prefix + datetime.now().strftime('%Y%m%d_%H%M%S') + '.zarr')
+        
+        store = zarr.storage.LocalStore(self.output_path)
+        self.zarr_root = zarr.group(store=store)
+        
+        for sensor in self.sensors:
+            
+            group = self.zarr_root.create_group(name = sensor.name)
+            
+            try:
+                sensor.initialize(group)
+                
+            except Exception as e:
+                logger.error(e)
+        
+            
+            
+
+class DataCollectionSystem:
         
         # Initialize LEM Box
         try:
