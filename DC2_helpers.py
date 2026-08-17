@@ -63,8 +63,11 @@ class SensorNotConnectedError(Exception):
     Exception raised when a sensor fails initial connection check
     """
     
-    def __init__(self, message):
-        
+    def __init__(self, message, sensor = None):
+
+        if message is None:
+            message = f"{sensor} failed to connect."
+            
         super().__init__(message)
         
         

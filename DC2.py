@@ -48,11 +48,13 @@ class DataCollectionSystem:
             
             try:
                 
-                sensor.verify()
+                sensor.detect()
                 self.sensors.add(sensor)
                 
             except Exception as e:
+
                 logger.log(e)
+                del sensor
                 
     def initialize_collection(self):
         
@@ -71,7 +73,9 @@ class DataCollectionSystem:
                 sensor.initialize(group)
                 
             except Exception as e:
+                
                 logger.error(e)
+                del sensor
         
             
             
