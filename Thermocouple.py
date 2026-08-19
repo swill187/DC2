@@ -12,7 +12,7 @@ logger = DC2_helpers.init_logger(__name__)
 
 class ThermocoupleDAQ(sensors.BaseSensor):
     
-    def __init__(self):
+    def __init__(self, device_name = 'cDAQ1Mod1'):
         
        super(ThermocoupleDAQ, self).__init__()
 
@@ -21,20 +21,16 @@ class ThermocoupleDAQ(sensors.BaseSensor):
        self.shape            = (4,) # each sample of the sensor produces 4 values
        self.columns          = ('Channel 0 (C)', 'Channel 1 (C)', 'Channel 2 (C)', 'Channel 3 (C)')
 
-       self.device = None
+       self.device_name = device_name
        self.task = None
+       
+       print('test...')
 
     def detect(self):
 
         system = nidaqmx.system.System.local()
 
-        if len(system.devices) > 1:
-            logger.error("Multiple NI devices detected. Support for multiple devices is not implemented. Connecting to first detected device...")
-
-        if len(system.devices) == 1:
-            self.device = system.devices[0]
-
-        else:
+        if self.device_name not in system.devices:
             raise DC2_helpers.SensorNotConnectedError(sensor = self.name)
 
     def initialize(self, zarr_group):
@@ -69,13 +65,15 @@ class ThermocoupleDAQ(sensors.BaseSensor):
         try:
             self.sample[:] = self.task.read()
             self.sample_time[:] = time.time_ns()
+            
         except nidaqmx.errors.Error as e:
-            print(f"Error reading thermocouple: {e}")
+            logger.critical(f"Error reading thermocouple: {e}")
 
     def stop_collection(self):
         super().stop_collection()
 
         self.task.close()
+        self.task = None
 
     def __del__(self):
 

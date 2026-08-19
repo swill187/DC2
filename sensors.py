@@ -30,6 +30,7 @@ class BaseSensor:
         self.flag_initialized   = False
         self.flag_is_collecting = False
 
+        self.zarr_group   = None
         self.time_chunk   = None
         self.data_chunk   = None
         self.buffer_len   = None
@@ -147,7 +148,9 @@ class BaseSensor:
             self.flag_is_collecting = False
 
             self.collection_thread.join()
-            self.writer_thread.join()
+            
+            if self.zarr_group is not None:
+                self.writer_thread.join()
 
         else:
             raise Exception(f"{self.name} is not collecting. It cannot be stopped!")
