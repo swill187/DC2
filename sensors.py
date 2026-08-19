@@ -1,3 +1,4 @@
+# generic imports
 import math
 import threading
 import zarr
@@ -5,8 +6,9 @@ import numpy as np
 import queue
 import time
 
-import nidaqmx
+import PySpin
 
+# project imports
 import DC2_helpers
 
 logger = DC2_helpers.init_logger(__name__)
@@ -22,10 +24,9 @@ class BaseSensor:
         self.name             = '' # name of sensor
         self.acquisition_rate = None # expected acquisition rate. Used to determine zarr chunk size
         self.shape            = (1,) # shape of a single sample. e.g. 64x64 image = (,64,64); 1D timeseries = (1,) 
-        self.dtype            = zarr.dtype.Float64
+        self.dtype            = np.float64
         self.columns          = tuple()
         
-        self.flag_is_connected  = False
         self.flag_initialized   = False
         self.flag_is_collecting = False
 
@@ -34,8 +35,8 @@ class BaseSensor:
         self.buffer_len   = None
         self.buffer_times = queue.Queue()
         self.buffers      = queue.Queue() # list of npy arrays of len buffer_len
-        self.sample_time  = np.zeros((1,), dtype = np.datetime64)
-        self.sample       = np.zeros(self.shape, dtype = self.dtype.to_numpy_dtype())  # holds a single sample recorded by the sensor
+        self.sample_time  = np.zeros((1,), dtype = np.uint64)
+        self.sample       = np.zeros(self.shape, dtype = self.dtype)  # holds a single sample recorded by the sensor
     
     # implemented by child sensor class
     def detect(self):
@@ -55,26 +56,28 @@ class BaseSensor:
         else:
             self.data_chunk = self.time_chunk[0] + self.shape
 
-        self.buffer_len = math.ceil(self.time_chunk / 10)
+        self.buffer_len = min(math.ceil(self.time_chunk / 10), int(self.acquisition_rate *  math.prod(self.shape) * 8 * 5)) # buffer is the lesser of: 10% of a chunk size; amount of data collected in 5 seconds
     
     def initialize(self, zarr_group):
 
-        self._get_chunk_sizes()
-        
-        self.group = zarr_group
-        self.time = self.group.create_array(name = 'time', 
-                                            shape = (0, 1), 
-                                            chunks = self.time_chunk, 
-                                            dimension_names = ('time', 'timestamp'),
-                                            dtype = zarr.dtype.Datetime64)
-        
-        self.data = self.group.create_array(name = 'data', 
-                                            shape = (0,) + self.shape, 
-                                            chunks = self.data_chunk, 
-                                            dimension_names = ('time',) + self.columns,
-                                            dtype = self.dtype)
-        
-        self.group['acquisition_rate'] = self.acquisition_rate
+        # init zarr group. if zarr_group is none, don't write any data
+        if zarr_group is not None:
+            self._get_chunk_sizes()
+            
+            self.group = zarr_group
+            self.time = self.group.create_array(name = 'time', 
+                                                shape = (0, 1), 
+                                                chunks = self.time_chunk, 
+                                                dimension_names = ('time', 'timestamp'),
+                                                dtype = zarr.dtype.Datetime64)
+            
+            self.data = self.group.create_array(name = 'data', 
+                                                shape = (0,) + self.shape, 
+                                                chunks = self.data_chunk, 
+                                                dimension_names = ('time',) + self.columns,
+                                                dtype = self.dtype)
+            
+            self.group['acquisition_rate'] = self.acquisition_rate
         
         # implement sensor-specific initialization here. include metadata
     
@@ -89,13 +92,15 @@ class BaseSensor:
                 self.initialize()
             except Exception as e:
                 logger.error(e)
+
+        # only write if desired
+        if self.zarr_group is not None:
+            self.writer_thread = threading.Thread(target = self.writer_thread)
+            self.writer_thread.start()
         
         # start threaded collection
         self.collection_thread = threading.Thread(target = self.collection_thread)
-        self.writer_thread     = threading.Thread(target = self.writer_thread)
-
         self.collection_thread.start()
-        self.writer_thread.start()
         
         self.flag_is_collecting = True
     
@@ -131,8 +136,8 @@ class BaseSensor:
 
             while not self.buffers.empty():
         
-                self.time.append(self.buffers.get())
-                self.data.append(self.buffer_times.get())
+                self.data.append(self.buffers.get())
+                self.time.append(self.buffer_times.get())
     
     # stop threaded process
     def stop_collection(self):
@@ -146,69 +151,54 @@ class BaseSensor:
 
         else:
             raise Exception(f"{self.name} is not collecting. It cannot be stopped!")
-        
-class ThermocoupleDAQ(BaseSensor):
-    
-    def __init__(self):
-        
-       super(ThermocoupleDAQ, self).__init__()
 
-       self.name             = 'ThermocoupleDAQ'
-       self.acquisition_rate = 3.5 # Hz
-       self.shape            = (4,) # each sample of the sensor produces 4 values
-       self.columns          = ('Channel 0 (C)', 'Channel 1 (C)', 'Channel 2 (C)', 'Channel 3 (C)')
+import pyaudio
 
-       self.device = None
-       self.task = None
+class Microphone(BaseSensor):
+
+    def __init__(self, mic_name = '485B39', api_id = 1):
+
+        super(Microphone, self).__init__()
+
+        self.name = 'Microphone'
+        self.acquisition_rate = 48e3
+        self.shape = (1,)
+
+        self.pyaudio = pyaudio.PyAudio()
+        self.mic_name = mic_name
+        self.api_id   = 1
 
     def detect(self):
 
-        system = nidaqmx.system.System.local()
+        for i in range(self.pyaudio.get_device_count()):
 
-        if len(system.devices) > 1:
-            logger.error("Multiple NI devices detected. Support for multiple devices is not implemented. Connecting to first detected device...")
+            mic = self.pyaudio.get_device_info_by_index(i)
 
-        if len(system.devices) == 1:
-            self.device = system.devices[0]
-            return True
+            if mic.get('MaxInputChannels') > 0 and self.mic_name.lower in mic.get('name', '').lower() and mic.get('hostApi') == self.api_id:
+                self.mic       = mic
+                self.mic_index = i
 
-        else:
+        if self.mic is None:
             raise DC2_helpers.SensorNotConnectedError(sensor = self.name)
 
     def initialize(self, zarr_group):
 
         super().initialize(zarr_group)
 
-        try:
+        self.audio_stream = self.pyaudio.open(
+            format = pyaudio.paFloat32,
+            channels = 1,
+            rate = self.acquisition_rate,
+            input = True,
+            frames_per_buffer = self.buffer_len,
+            input_device_index=self.mic_index,
+            stream_callback = self._audio_callback
+        )
 
-            self.task = nidaqmx.Task()
+        self.flag_initialized = True
 
-            for i in range(4):
-
-                channel = f"{self.device_name}/ai{i}"
-
-                self.task.ai_channels.add_ai_thrmcpl_chan(channel,
-                                                          name_to_assign_to_channel = f"Thermocouple_{i}",
-                                                          thermocouple_type = nidaqmx.constants.ThermocoupleType.K,
-                                                          units = nidaqmx.constants.TemperatureUnits.DEG_C)
-            
-            self.task.timing.cfg_samp_clk_timing(rate = self.sample_rate,
-                                                 sample_mode = nidaqmx.constants.AcquisitionType.CONTINUOUS,
-                                                 samps_per_chan = 1)
-
-            self.flag_initialized = True
-
-        except Exception as e:
-
-            logger.error(f"Error initializing ThermocoupleDAQ: {e}")
-
-    def sample_sensor(self):
-
-        try:
-            self.sample[:] = self.task.read()
-            self.sample_time[:] = time.time()
-        except nidaqmx.errors.Error as e:
-            print(f"Error reading thermocouple: {e}")
-
+        ### TODO: Gonna need some different handling of buffers if pyaudio is natively buffering for us...
 
     
+
+

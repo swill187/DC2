@@ -1,156 +1,87 @@
-import nidaqmx
-from nidaqmx.constants import ThermocoupleType, TemperatureUnits, AcquisitionType
-import csv
-from datetime import datetime
+# generic imports
 import time
-import os
-import keyboard
 
-class ThermocoupleDAQ:
-    def __init__(self, device_name="cDAQ1Mod1", sample_rate=3.5):
-        self.device_name = device_name
-        self.sample_rate = sample_rate
-        self.task = None
-        self.is_initialized = False
+# hardware-specific imports
+import nidaqmx
+
+# project imports
+import DC2_helpers
+import sensors
+
+logger = DC2_helpers.init_logger(__name__)
+
+class ThermocoupleDAQ(sensors.BaseSensor):
+    
+    def __init__(self):
         
-    def initialize(self):
-        """Initialize the DAQ system."""
-        try:
-            self.task = nidaqmx.Task()
-            for i in range(4):
-                channel = f"{self.device_name}/ai{i}"
-                self.task.ai_channels.add_ai_thrmcpl_chan(
-                    channel,
-                    name_to_assign_to_channel=f"Thermocouple_{i}",
-                    thermocouple_type=ThermocoupleType.K,
-                    units=TemperatureUnits.DEG_C
-                )
-            
-            self.task.timing.cfg_samp_clk_timing(
-                rate=self.sample_rate,
-                sample_mode=AcquisitionType.CONTINUOUS,
-                samps_per_chan=1
-            )
-            self.is_initialized = True
-            return True
-        except Exception as e:
-            print(f"Error initializing thermocouple DAQ: {e}")
-            return False
+       super(ThermocoupleDAQ, self).__init__()
 
-    def read(self):
-        """Read current temperature values"""
-        if not self.is_initialized:
-            return None, None
-            
+       self.name             = 'ThermocoupleDAQ'
+       self.acquisition_rate = 3.5 # Hz
+       self.shape            = (4,) # each sample of the sensor produces 4 values
+       self.columns          = ('Channel 0 (C)', 'Channel 1 (C)', 'Channel 2 (C)', 'Channel 3 (C)')
+
+       self.device = None
+       self.task = None
+
+    def detect(self):
+
+        system = nidaqmx.system.System.local()
+
+        if len(system.devices) > 1:
+            logger.error("Multiple NI devices detected. Support for multiple devices is not implemented. Connecting to first detected device...")
+
+        if len(system.devices) == 1:
+            self.device = system.devices[0]
+
+        else:
+            raise DC2_helpers.SensorNotConnectedError(sensor = self.name)
+
+    def initialize(self, zarr_group):
+
+        super(ThermocoupleDAQ, self).initialize(zarr_group)
+
         try:
-            temperatures = self.task.read()
-            timestamp = time.time()
-            return temperatures, timestamp
+
+            self.task = nidaqmx.Task()
+
+            for i in range(4):
+
+                channel = f"{self.device_name}/ai{i}"
+
+                self.task.ai_channels.add_ai_thrmcpl_chan(channel,
+                                                          name_to_assign_to_channel = f"Thermocouple_{i}",
+                                                          thermocouple_type = nidaqmx.constants.ThermocoupleType.K,
+                                                          units = nidaqmx.constants.TemperatureUnits.DEG_C)
+            
+            self.task.timing.cfg_samp_clk_timing(rate = self.acquisition_rate,
+                                                 sample_mode = nidaqmx.constants.AcquisitionType.CONTINUOUS,
+                                                 samps_per_chan = 1)
+
+            self.flag_initialized = True
+
+        except Exception as e:
+
+            logger.error(f"Error initializing ThermocoupleDAQ: {e}")
+
+    def sample_sensor(self):
+
+        try:
+            self.sample[:] = self.task.read()
+            self.sample_time[:] = time.time_ns()
         except nidaqmx.errors.Error as e:
             print(f"Error reading thermocouple: {e}")
-            return None, None
 
-    def close(self):
-        """Cleanup DAQ resources"""
-        if self.task:
+    def stop_collection(self):
+        super().stop_collection()
+
+        self.task.close()
+
+    def __del__(self):
+
+        if self.task is not None:
             self.task.close()
-            self.task = None
-        self.is_initialized = False
 
-def check_daq_connection(device_name="cDAQ1Mod1"):
-    """Verify DAQ connection."""
-    try:
-        daq = ThermocoupleDAQ(device_name)
-        result = daq.initialize()
-        daq.close()
-        return result
-    except Exception:
-        return False
+if __name__ == '__main__':
 
-def write_to_csv(temperatures, timestamp, filename="thermocouple_data.csv"):
-    """Write temperature data to CSV file with timestamp."""
-    if temperatures is None:
-        return False
-        
-    try:
-        file_exists = os.path.isfile(filename)
-        
-        # Get or create start time
-        if not hasattr(write_to_csv, 'start_time'):
-            write_to_csv.start_time = timestamp
-            
-        # Calculate relative timestamp in seconds with microsecond precision
-        relative_time = timestamp - write_to_csv.start_time
-        
-        with open(filename, mode='a', newline='') as file:
-            writer = csv.writer(file)
-            
-            if not file_exists:
-                writer.writerow(['Timestamp', 'Relative Time (s)', 'Channel 0 (°C)', 
-                               'Channel 1 (°C)', 'Channel 2 (°C)', 'Channel 3 (°C)'])
-            
-            # Use same datetime format as terminal output
-            current_time = datetime.fromtimestamp(timestamp)
-            formatted_time = current_time.strftime('%Y-%m-%d %H:%M:%S.%f')
-            
-            writer.writerow([formatted_time, f"{relative_time:.6f}"] + 
-                          [f"{temp:.2f}" for temp in temperatures])
-                
-        return True
-    except Exception as e:
-        print(f"Error writing to CSV: {e}")
-        return False
-
-def print_temperature(temperatures, timestamp):
-    """Print the temperature readings in a formatted way."""
-    if temperatures is None:
-        return
-    # Format time with microsecond precision
-    current_time = datetime.fromtimestamp(timestamp)
-    formatted_time = current_time.strftime('%Y-%m-%d %H:%M:%S.%f')
-    print(f"\nData received at {formatted_time}")
-    
-    # Handle the data as a flat list of temperatures
-    if isinstance(temperatures[0], (int, float)):
-        for i, temp in enumerate(temperatures):
-            print(f"Channel {i}: {temp:.2f}°C", end="  ")
-        print()
-    else:
-        print("Error: Unexpected temperature data format")
-
-if __name__ == "__main__":
-    # Configuration
-    DEVICE_NAME = "cDAQ1Mod1"
-    SAMPLE_RATE = 3.5  # Max sample rate of the DAQ
-
-    print("Thermocouple DAQ Test Script")
-    print("----------------------------")
-    print(f"Device: {DEVICE_NAME}")
-    print(f"Sample Rate: {SAMPLE_RATE} Hz")
-    print("\nPress 'Q' to stop recording")
-    
-    daq = ThermocoupleDAQ(DEVICE_NAME, SAMPLE_RATE)
-    if daq.initialize():
-        print(f"\nSuccessfully connected to {DEVICE_NAME}")
-        running = True
-        
-        try:
-            sleep_time = max(0.001, (1.0 / SAMPLE_RATE) * 0.9)
-            while running:
-                temperature, timestamp = daq.read()
-                if temperature is not None:
-                    print_temperature(temperature, timestamp)
-                    write_to_csv(temperature, timestamp)
-                
-                if keyboard.is_pressed('q'):
-                    print("\nStopping data collection...")
-                    running = False
-                
-                time.sleep(sleep_time)
-        except KeyboardInterrupt:
-            print("\nData collection interrupted")
-        finally:
-            daq.close()
-            print("Data collection complete")
-    else:
-        print(f"Could not connect to {DEVICE_NAME}")
+    DC2_helpers.single_sensor_display(ThermocoupleDAQ)

@@ -1,6 +1,7 @@
 import logging
 import pathlib
 import tkinter as tk
+import keyboard
 
 def init_logger(script_name):
     
@@ -58,12 +59,46 @@ def select_folder(title='Select Build Folder'):
 
     return pathlib.Path(path)
 
+def single_sensor_display(sensor_obj, sensor_args = {}):
+
+    class printing_sensor(sensor_obj):
+
+        def __init__(self, sensor_args):
+            super(printing_sensor, self).__init__(**sensor_args)
+
+        def sample_sensor(self):
+
+            super(printing_sensor, self).sample_sensor()
+
+            print(f'\r{sensor_obj.__name__}\ntime: {self.sample_time}\n value: {self.sample}', flush=True)
+
+
+    logger = logging.getLogger('__main__')
+    sensor = printing_sensor(sensor_args)
+
+    try: 
+        sensor.detect()
+    except SensorNotConnectedError:
+        
+        logger.critical(f'{sensor.name} not found. Aborting...')
+        return
+
+    sensor.initialize(zarr_group = None)
+    sensor.start_collection()
+
+    while True:
+
+        if keyboard.is_pressed('q'):
+            sensor.stop_collection()
+            break
+
+
 class SensorNotConnectedError(Exception):
     """
     Exception raised when a sensor fails initial connection check
     """
     
-    def __init__(self, message, sensor = None):
+    def __init__(self, message = None, sensor = None):
 
         if message is None:
             message = f"{sensor} failed to connect."
