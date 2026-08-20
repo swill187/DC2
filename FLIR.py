@@ -1,232 +1,142 @@
-'''
-Description: Modified version of FLIR.py with decoupled read/write operations
-and support for future live feed implementation.
-'''
-
-import os
-import numpy as np
-from FLIRwrapperBB import Calibrate_BB, EnvHandler_BB, FLIRCAMERA
 import PySpin
-from datetime import datetime
-import time
-import queue
-from threading import Thread, Lock
 
-def check_flir_connection():
-    """Verify FLIR camera connection."""
-    try:
-        system = PySpin.System.GetInstance()
-        cam_list = system.GetCameras()
-        
-        if cam_list.GetSize() > 0:
-            cam_list.Clear()
-            system.ReleaseInstance()
-            return True
-        
-        cam_list.Clear()
-        system.ReleaseInstance()
-        return False
-    except Exception as e:
-        print(f"FLIR camera connection error: {e}")
-        return False
+import sensors
+import DC2_helpers
 
-class FLIRCollector:
-    def __init__(self):
+logger = DC2_helpers.init_logger(__name__)
+
+class FLIR(sensors.BaseSensor):
+
+    def __init__(self, IRFormat = 'RADIOMETRIC'):
+
+        super().__init__()
+
+        self.name = 'FLIR'
+        self.acquisition_rate = 30 # Hz
+        self.shape = (464, 348)
+        self.columns = ('FLIR')
+
+        self.system = PySpin.System.GetInstance()
         self.camera = None
-        self.calibration = None
-        self.env_params = None
-        self.frame_count = 0
-        self.is_initialized = False
-        self.frame_queue = queue.Queue(maxsize=30)  # Buffer for live feed
-        self.latest_frame = None
-        self.frame_lock = Lock()
-        self.system = None
-        self.output_path = None  # Add this line
+        self.IRFormat = IRFormat # can be 'RADIOMETRIC', 'TemperatureLinear10mK', or 'TemperatureLinear100mK'
 
-    def initialize(self, output_path):
-        """Initialize FLIR camera and set up calibration."""
-        self.output_path = output_path  # Store output path for later use
+    def detect(self):
+
         try:
-            # Initialize PySpin system first
-            self.system = PySpin.System.GetInstance()
+
             cam_list = self.system.GetCameras()
-            
-            if cam_list.GetSize() == 0:
-                print("No FLIR camera detected")
-                return False
-                
-            print("Initializing FLIR camera...")
-            
-            # Initialize camera
-            self.camera = FLIRCAMERA()
-            time.sleep(0.5)
-            self.camera = self.camera.set_IRFormatType()
-            
-            # Set up calibration
-            self.calibration = Calibrate_BB()
-            self.calibration.get_calibration_details(self.calibration, self.camera.nodemap)
-            
-            # Set up environmental parameters
-            self.env_params = EnvHandler_BB()
-            self.env_params = EnvHandler_BB.set_default_env(self.env_params)
-            self.env_params = EnvHandler_BB.calc_env(self.env_params, self.calibration)
 
-            # Create output directory and save calibration
-            flir_path = os.path.join(output_path, "FLIR")
-            os.makedirs(flir_path, exist_ok=True)
-            
-            # Save FLIR variables file during initialization
-            print("Saving FLIR calibration parameters...")
-            EnvHandler_BB.create_JSON(self.env_params, self.calibration, flir_path)
-            
-            print("FLIR camera initialization complete")
-            self.is_initialized = True
-            
-            # Don't start acquisition yet - wait for actual collection to start
-            return True
+            camera_detected = cam_list.GetSize() > 0 # did we detect at least one camera?
 
-        except Exception as e:
-            print(f"Error initializing FLIR camera: {e}")
-            self.cleanup()
-            return False
-
-    def start_acquisition(self):
-        """Start camera acquisition - called just before collecting data."""
-        if not self.is_initialized:
-            return False
-            
-        try:
-            self.camera.intializeAcquition()
-            time.sleep(0.5)
-            return True
-        except Exception as e:
-            print(f"Error starting FLIR acquisition: {e}")
-            return False
-
-    def read_frame(self):
-        """Capture a single frame from the FLIR camera."""
-        if not self.is_initialized:
-            return None, None
-
-        try:
-            image_result, _ = self.camera.get_frame()
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-            
-            # Update latest frame for live view
-            with self.frame_lock:
-                self.latest_frame = image_result
-                
-            # Add to queue for saving
-            self.frame_queue.put((image_result, timestamp))
-            
-            return image_result, timestamp
-        except Exception as e:
-            print(f"Error reading FLIR frame: {e}")
-            return None, None
-
-    def get_latest_frame(self):
-        """Get the most recent frame for display purposes."""
-        with self.frame_lock:
-            return self.latest_frame
-
-    def save_frames(self, output_path):
-        """Save frames from queue to files."""
-        while True:
-            try:
-                frame_data, timestamp = self.frame_queue.get(timeout=1)
-                self.write_frame(frame_data, timestamp, output_path)
-                self.frame_queue.task_done()
-            except queue.Empty:
-                if not self.is_initialized:
-                    break
-
-    def write_frame(self, frame_data, timestamp, output_path):
-        """Save frame data with timestamp."""
-        try:
-            flir_path = os.path.join(output_path, "FLIR")
-            filename = f"FLIR-Frame-{self.frame_count}.npy"
-            filepath = os.path.join(flir_path, filename)
-            
-            np_data = {'frame': frame_data, 'timestamp': timestamp}
-            np.save(filepath, np_data)
-            self.frame_count += 1
-            return True
-        except Exception as e:
-            print(f"Error writing FLIR frame: {e}")
-            return False
-
-    def cleanup(self):
-        """Clean up FLIR camera resources."""
-        if self.camera:
-            try:
-                if self.is_initialized:
-                    self.camera.uninitialize()
-                self.is_initialized = False
-            except Exception as e:
-                print(f"Error cleaning up FLIR camera: {e}")
-        
-        if self.system:
+            cam_list.Clear()
             self.system.ReleaseInstance()
-            self.system = None
 
-def start_flir_collection(output_path, stop_flag):
-    """Start FLIR data collection with separate read and write threads."""
-    collector = FLIRCollector()
-    if not collector.initialize(output_path):
-        return
+            if not camera_detected:
+                raise DC2_helpers.SensorNotConnectedError(sensor = self.name)
+            
+        except Exception as e:
+            raise Exception(f"FLIR camera connection error: {e}")
 
-    # Start acquisition explicitly before starting collection threads
-    if not collector.start_acquisition():
-        collector.cleanup()
-        return
+    def initialize(self, zarr_group):
 
-    # Start separate threads for reading and saving
-    read_thread = Thread(target=frame_reader, args=(collector, stop_flag))
-    save_thread = Thread(target=collector.save_frames, args=(output_path,))
-    
-    try:
-        read_thread.start()
-        save_thread.start()
-        
-        read_thread.join()
-        collector.is_initialized = False
-        save_thread.join()
-    finally:
-        collector.cleanup()
+        super(FLIR, self).initialize(zarr_group)
 
-def frame_reader(collector, stop_flag):
-    """Thread function to continuously read frames."""
-    while not stop_flag.is_set():
-        collector.read_frame()
-        #time.sleep(0.1)  # Adjust rate as needed
+        cam_list = self.system.GetCameras()
 
-def start_flir_collection_thread(collector, stop_flag):
-    """Start FLIR data collection using pre-initialized collector."""
-    # Start separate threads for reading and saving
-    read_thread = Thread(target=frame_reader, args=(collector, stop_flag))
-    save_thread = Thread(target=collector.save_frames, args=(collector.output_path,))
-    
-    try:
-        read_thread.start()
-        save_thread.start()
-        
-        read_thread.join()
-        collector.is_initialized = False
-        save_thread.join()
-    finally:
-        collector.cleanup()
+        if cam_list.GetSize() == 0:
 
-# For future live feed implementation:
-def display_live_feed(collector):
-    """Example function for future live feed implementation."""
-    try:
-        import cv2
-        while collector.is_initialized:
-            frame = collector.get_latest_frame()
-            if frame is not None:
-                # Convert frame to temperature values if needed
-                # Display frame using cv2.imshow()
-                # Add overlay information if needed
-                pass
-    except ImportError:
-        print("OpenCV not installed. Live feed not available.")
+            raise Exception('No FLIR camera detected')
+            return
+
+        self.camera = cam_list[0] # If we see interference from a 2nd camera, we can use TLDeviceNodeMap to read SNs of individual cameras
+        self.camera.Init()
+
+        stream_nodemap = self.camera.GetTLStreamNodeMap()
+        device_nodemap = self.camera.GetTLDeviceNodeMap()
+        nodemap        = self.camera.GetNodeMap()
+
+        stream_nodemap_settings = {
+            'StreamBufferHandlingMode': 'NewestOnly',
+        }
+
+        nodemap_settings = {
+            'PixelFormat': 'Mono16',
+            'AcquisitionMode': 'Continuous',
+            'IRFormat': self.IRFormat,
+        }
+
+        settings = {
+            stream_nodemap: stream_nodemap_settings,
+            nodemap: nodemap_settings
+        }
+
+        # iterate over nodemaps, settings dicts
+        for map, list in settings.items():
+
+            # iterate over nodes, settings in settings lists
+            for node, setting in list.items():
+
+                # set node settings to desired values
+
+                if not PySpin.IsWritable(map.GetNode(node)):
+                    raise Exception(f"FLIR node {node} is not writable")
+
+                map.GetNode(node).SetIntValue(map.GetNode(node).GetEntryByName(setting).GetValue())
+
+
+        radiometric_calibration_values = {
+            'R',       # calibration constant
+            'B',       # calibration constant
+            'F',       # calibration constant
+            'X',       # scaling factor for attenuation
+            'alpha1',  # attenation for atmosphaere without water vapor
+            'alpha2',  # attenuation for atmosphere without water vapor
+            'beta1',   # attenuation for water vapor
+            'beta2',   # attenuation for water vapor
+            'J1',      # gain
+            'J0',      # offset
+            }
+
+        for value in radiometric_calibration_values:
+            zarr_group['radiometric_calibration_values'][value] = nodemap.GetNode(value).GetValue()
+
+        environment_values = {
+            'Emiss': 0.97,
+            'TRefl': 293.15,
+            'TAtm': 293.15,
+            'TAtmC': 20,
+            'Humidity': 0.55,
+            'Dist': 2,
+            'ExtOpticsTransmission': 1,
+            'ExtOpticsTemp': 293.15,
+            }
+
+        zarr_group['environment_values'] = environment_values
+
+
+        self.flag_initialized = True
+
+
+    def collection_thread(self):
+
+        self.camera.BeginAcquisition()
+
+        super(FLIR, self).collection_thread()
+
+    def sample_sensor(self):
+
+        img = self.camera.GetNextImage()
+        if img.IsIncomplete():
+            raise Exception(f'FLIR: Image incomplete with image status {img.GetImageStatus()}.')
+
+        self.sample[:] = img.GetNDArray()
+        self.sample_time[:] = img.GetTimeStamp()
+
+        img.Release()
+
+    def stop_collection(self):
+
+        super(FLIR, self).stop_collection()
+
+        self.camera.uninitialize()
+        self.system.ReleaseInstance()
