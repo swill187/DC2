@@ -23,8 +23,6 @@ class ThermocoupleDAQ(sensors.BaseSensor):
 
        self.device_name = device_name
        self.task = None
-       
-       print('test...')
 
     def detect(self):
 

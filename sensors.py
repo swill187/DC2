@@ -29,6 +29,8 @@ class BaseSensor:
         
         self.flag_initialized   = False
         self.flag_is_collecting = False
+        
+        self.lock = threading.Lock()
 
         self.zarr_group   = None
         self.time_chunk   = None
@@ -37,7 +39,7 @@ class BaseSensor:
         self.buffer_times = queue.Queue()
         self.buffers      = queue.Queue() # list of npy arrays of len buffer_len
         self.sample_time  = np.zeros((1,), dtype = np.uint64)
-        self.sample       = np.zeros(self.shape, dtype = self.dtype)  # holds a single sample recorded by the sensor
+        self.sample       = None  # holds a single sample recorded by the sensor
     
     # implemented by child sensor class
     def detect(self):
@@ -47,23 +49,25 @@ class BaseSensor:
     def _get_chunk_sizes(self):
         
         # chunk to 1MB chunks (recommendation of zarr docs)
-        self.time_chunk = math.ceil(10 ** 6 / (math.prod(self.shape) * 8))     # TODO: what type are we using? Always float/int64?
+        self.time_chunk = (math.ceil(10 ** 6 / (math.prod(self.shape) * 8)),)     # TODO: what type are we using? Always float/int64?
         
         # if we are handling one/multiple 1D timeseries columns, chunk down each column separately (allow for selective column reads)
         if len(self.shape) < 2:
-            self.data_chunk = self.time_chunk[0] + (1,)
+            self.data_chunk = self.time_chunk + (1,)
         
         # if we are handling 2D+ data, don't bother to chunk in dimensions other than time
         else:
-            self.data_chunk = self.time_chunk[0] + self.shape
+            self.data_chunk = self.time_chunk + self.shape
 
-        self.buffer_len = min(math.ceil(self.time_chunk / 10), int(self.acquisition_rate *  math.prod(self.shape) * 8 * 5)) # buffer is the lesser of: 10% of a chunk size; amount of data collected in 5 seconds
+        self.buffer_len = min(math.ceil(self.time_chunk[0] / 10), math.ceil(self.acquisition_rate * .5)) # buffer is the lesser of: 10% of a chunk size; amount of data collected in 5 seconds
     
     def initialize(self, zarr_group):
+        
+        self.sample = np.zeros(self.shape, dtype = self.dtype)  # holds a single sample recorded by the sensor
+        self._get_chunk_sizes() # needed even when we aren't writing data to define self.buffer_len
 
         # init zarr group. if zarr_group is none, don't write any data
         if zarr_group is not None:
-            self._get_chunk_sizes()
             
             self.group = zarr_group
             self.time = self.group.create_array(name = 'time', 
@@ -93,6 +97,9 @@ class BaseSensor:
                 self.initialize()
             except Exception as e:
                 logger.error(e)
+        
+        with self.lock:
+            self.flag_is_collecting = True # we aren't really collecting until we start the threads, but we were seeing a race condition on collection_thread()'s while condition
 
         # only write if desired
         if self.zarr_group is not None:
@@ -102,16 +109,17 @@ class BaseSensor:
         # start threaded collection
         self.collection_thread = threading.Thread(target = self.collection_thread)
         self.collection_thread.start()
-        
-        self.flag_is_collecting = True
     
     # implemented by child sensor class
     def collection_thread(self):
 
-        while self.flag_is_collecting:
+        with self.lock:
+            flag_is_collecting = self.flag_is_collecting
+            
+        while flag_is_collecting:
 
             buffer      = np.zeros((self.buffer_len,) + self.shape)
-            buffer_time = np.zeros(self.buffer_len, 1)
+            buffer_time = np.zeros((self.buffer_len, 1))
 
             for i in range(self.buffer_len):
 
@@ -119,8 +127,14 @@ class BaseSensor:
                 buffer[i]      = self.sample
                 buffer_time[i] = self.sample_time
 
-            self.buffers.put(buffer)
-            self.buffer_times.put(buffer_time)
+            if self.zarr_group is not None:
+                self.buffers.put(buffer)
+                self.buffer_times.put(buffer_time)
+                
+            with self.lock:
+                flag_is_collecting = self.flag_is_collecting
+                
+        return
 
     def sample_sensor(self):
         """
@@ -143,9 +157,13 @@ class BaseSensor:
     # stop threaded process
     def stop_collection(self):
 
+        with self.lock:
+            flag_is_collecting = self.flag_is_collecting
+
         if self.flag_is_collecting:
 
-            self.flag_is_collecting = False
+            with self.lock:
+                self.flag_is_collecting = False
 
             self.collection_thread.join()
             

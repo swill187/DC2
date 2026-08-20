@@ -1,7 +1,9 @@
 import logging
 import pathlib
 import tkinter as tk
+from tkinter import filedialog
 import keyboard
+import time
 
 def init_logger(script_name):
     
@@ -70,7 +72,8 @@ def single_sensor_display(sensor_obj, sensor_args = {}):
 
             super(printing_sensor, self).sample_sensor()
 
-            print(f'\r{sensor_obj.__name__}\ntime: {self.sample_time}\n value: {self.sample}', flush=True)
+            with self.lock:
+                print(f'{sensor_obj.__name__}\ttime: {self.sample_time}\tvalue: {self.sample}', end='\r') #, flush=True)
 
 
     logger = logging.getLogger('__main__')
@@ -87,7 +90,7 @@ def single_sensor_display(sensor_obj, sensor_args = {}):
     sensor.start_collection()
 
     while True:
-
+        
         if keyboard.is_pressed('q'):
             sensor.stop_collection()
             break

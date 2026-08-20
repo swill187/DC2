@@ -14,27 +14,27 @@ import zarr
 # DC2 imports
 import DC2_helpers
 import sensors
-import thermocouple
+import Thermocouple
 
 # --------------------------------------
 
 logger = DC2_helpers.init_logger(__name__)
 
-sensor_list = [thermocouple.thermocoupleDAQ] # list of all sensors we will search for. To use more than one of the same sensor type, add a duplicate to the list
+sensor_list = [Thermocouple.ThermocoupleDAQ] # list of all sensors we will search for. To use more than one of the same sensor type, add a duplicate to the list
         
 class DataCollectionSystem:
     
     def __init__(self, file_prefix = 'data_collection'):
         
         self.output_path = None
-        self.sensors = {}
+        self.sensors = set()
         self.file_prefix = file_prefix
         
     def test_connection(self):
         
         logger.debug('Testing sensor connections...')
         
-        for expected_sensor in sensors:
+        for expected_sensor in sensor_list:
             
             sensor = expected_sensor()
             
@@ -45,7 +45,7 @@ class DataCollectionSystem:
                 
             except Exception as e:
 
-                logger.log(e)
+                logger.warning(e)
                 del sensor
 
         # return value tells us if any sensors are connected
@@ -108,7 +108,7 @@ def main():
     system = DataCollectionSystem()
     
     # Verify connected sensors
-    if not system.verify_sensors():
+    if not system.test_connection():
         logger.critical("No sensors detected. Please check connections.")
         return
 
