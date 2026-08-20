@@ -18,10 +18,10 @@ class RSI(sensors.BaseSensor):
         self.name             = 'RSI'
         self.acquisition_rate = 100 # Hz
         self.shape            = (1,) # each sample of the sensor produces 4 values
-        self.columns          = ('json')
+        self.columns          = ('json',)
         self.dtype            = 'U500'
 
-        self.recv_ip        = recv_ip # expected robot IP
+        self.recv_ip   = recv_ip # expected robot IP
         self.send_port = send_port
         self.recv_port = recv_port
 
@@ -42,14 +42,21 @@ class RSI(sensors.BaseSensor):
 
     def initialize(self, zarr_group):
 
-        super(RSI, self).initialize(zarr_group)
+        try:
+            super(RSI, self).initialize(zarr_group)
 
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        if self.flag_send: self.socket.connect((self.send_ip, self.send_port))   # connect to robot for UDP send
-        
-        self.socket.bind((self.recv_ip, self.recv_port))
-        self.socket.settimeout(0.1)
-        logger.debug(f"{self.name} listening on {self.recv_ip}:{self.recv_port}")
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            if self.flag_send: self.socket.connect((self.send_ip, self.send_port))   # connect to robot for UDP send
+            
+            self.socket.bind((self.recv_ip, self.recv_port))
+            self.socket.settimeout(0.1)
+            logger.debug(f"{self.name} listening on {self.recv_ip}:{self.recv_port}")
+
+            self.flag_initialized = True
+
+        except Exception as e:
+
+            logger.error(f"Error initializing ThermocoupleDAQ: {e}")
 
     def sample_sensor(self):
 
@@ -109,4 +116,6 @@ class RSI(sensors.BaseSensor):
         if self.socket is not None:
             self.socket.close()
 
-        super(RSI, self).__del__()
+if __name__ == '__main__':
+
+    DC2_helpers.single_sensor_display(RSI)
