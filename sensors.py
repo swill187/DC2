@@ -49,15 +49,15 @@ class BaseSensor:
     def _get_chunk_sizes(self):
         
         # chunk to 1MB chunks (recommendation of zarr docs)
-        self.time_chunk = (math.ceil(10 ** 6 / (math.prod(self.shape) * 8)),)     # TODO: what type are we using? Always float/int64?
+        self.time_chunk = (math.ceil(10 ** 6 / (math.prod(self.shape) * 8)), 1)     # TODO: what type are we using? Always float/int64?
         
         # if we are handling one/multiple 1D timeseries columns, chunk down each column separately (allow for selective column reads)
         if len(self.shape) < 2:
-            self.data_chunk = self.time_chunk + (1,)
+            self.data_chunk = (self.time_chunk[0],) + (1,)
         
         # if we are handling 2D+ data, don't bother to chunk in dimensions other than time
         else:
-            self.data_chunk = self.time_chunk + self.shape
+            self.data_chunk = (self.time_chunk[0],) + self.shape
 
         self.buffer_len = min(math.ceil(self.time_chunk[0] / 10), math.ceil(self.acquisition_rate * .5)) # buffer is the lesser of: 10% of a chunk size; amount of data collected in 5 seconds
     
@@ -74,7 +74,7 @@ class BaseSensor:
                                                 shape = (0, 1), 
                                                 chunks = self.time_chunk, 
                                                 dimension_names = ('time', 'timestamp'),
-                                                dtype = zarr.dtype.Datetime64)
+                                                dtype = np.uint64)
             
             self.data = self.group.create_array(name = 'data', 
                                                 shape = (0,) + self.shape, 
@@ -82,7 +82,7 @@ class BaseSensor:
                                                 dimension_names = ('time',) + self.columns,
                                                 dtype = self.dtype)
             
-            self.group['acquisition_rate'] = self.acquisition_rate
+            self.group.attrs['acquisition_rate'] = self.acquisition_rate
         
         # implement sensor-specific initialization here. include metadata
     

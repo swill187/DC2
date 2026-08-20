@@ -13,7 +13,6 @@ import zarr
 
 # DC2 imports
 import DC2_helpers
-import sensors
 import Thermocouple
 
 # --------------------------------------
