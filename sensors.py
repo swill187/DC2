@@ -32,7 +32,7 @@ class BaseSensor:
         
         self.lock = threading.Lock()
 
-        self.zarr_group   = None
+        self.group   = None
         self.time_chunk   = None
         self.data_chunk   = None
         self.buffer_len   = None
@@ -102,7 +102,7 @@ class BaseSensor:
             self.flag_is_collecting = True # we aren't really collecting until we start the threads, but we were seeing a race condition on collection_thread()'s while condition
 
         # only write if desired
-        if self.zarr_group is not None:
+        if self.group is not None:
             self.writer_thread = threading.Thread(target = self.writer_thread)
             self.writer_thread.start()
         
@@ -127,7 +127,7 @@ class BaseSensor:
                 buffer[i]      = self.sample
                 buffer_time[i] = self.sample_time
 
-            if self.zarr_group is not None:
+            if self.group is not None:
                 self.buffers.put(buffer)
                 self.buffer_times.put(buffer_time)
                 
@@ -144,15 +144,21 @@ class BaseSensor:
         raise NotImplementedError
     
     def writer_thread(self):
+        
+        with self.lock:
+            flag_is_collecting = self.flag_is_collecting
 
         while self.flag_is_collecting:
 
             time.sleep(.5)
 
             while not self.buffers.empty():
-        
+
                 self.data.append(self.buffers.get())
                 self.time.append(self.buffer_times.get())
+                
+            with self.lock:
+                flag_is_collecting = self.flag_is_collecting
     
     # stop threaded process
     def stop_collection(self):
@@ -167,7 +173,7 @@ class BaseSensor:
 
             self.collection_thread.join()
             
-            if self.zarr_group is not None:
+            if self.group is not None:
                 self.writer_thread.join()
 
         else:
