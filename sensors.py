@@ -118,7 +118,7 @@ class BaseSensor:
             
         while flag_is_collecting:
 
-            buffer      = np.zeros((self.buffer_len,) + self.shape)
+            buffer      = np.zeros((self.buffer_len,) + self.shape, dtype = self.dtype)
             buffer_time = np.zeros((self.buffer_len, 1))
 
             for i in range(self.buffer_len):

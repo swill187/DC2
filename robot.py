@@ -29,15 +29,17 @@ class RSI(sensors.BaseSensor):
         self.send_ip   = send_ip # ip to send responses to
         self.send_cols = send_cols # if we are doing two_way communcation, this is a tuple of column names we plan to send
         self.send_fns  = send_fns # if we are doing two-way communication, this is a list of functions used to generate our responses to the robot
+        
+        self.socket = None
 
     def detect(self):
 
-        param = '-n' if os.sys.platform().lower() == 'win32' else '-c'
-        timeout_param = '-w' if os.sys.platform().lower() == 'win32' else '-W'
+        param = '-n' if os.sys.platform.lower() == 'win32' else '-c'
+        timeout_param = '-w' if os.sys.platform.lower() == 'win32' else '-W'
 
-        result = subprocess.run(f"ping {param} 1 {timeout_param} 1 {self.ip}", capture_output = True, text = True)
+        result = subprocess.run(f"ping {param} 1 {timeout_param} 1 {self.recv_ip}", capture_output = True, text = True)
 
-        if result != 0:
+        if result.returncode != 0:
             raise DC2_helpers.SensorNotConnectedError(sensor = self.name)
 
     def initialize(self, zarr_group):
@@ -65,7 +67,7 @@ class RSI(sensors.BaseSensor):
             while True:
 
                 data = self.socket.recv(1024)
-                time = time.time_ns() # Get timestamp immediately after receiving data TODO: RSI needs to report a send time instead of us writing a read time
+                data_time = time.time_ns() # Get timestamp immediately after receiving data TODO: RSI needs to report a send time instead of us writing a read time
 
                 data_str = data.decode('utf-8') # store recieved string as str, not byte array
 
@@ -73,7 +75,7 @@ class RSI(sensors.BaseSensor):
                     break
 
             self.sample[:] = data_str
-            self.sample_time[:] = time
+            self.sample_time[:] = data_time
 
             if self.flag_send: 
 
