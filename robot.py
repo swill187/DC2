@@ -63,8 +63,11 @@ class RSI(sensors.BaseSensor):
     def sample_sensor(self):
 
         try:
+            
+            sample_start = time.time_ns()
+            data_time = sample_start
 
-            while True:
+            while data_time - sample_start < 1e9:
 
                 data = self.socket.recv(1024)
                 data_time = time.time_ns() # Get timestamp immediately after receiving data TODO: RSI needs to report a send time instead of us writing a read time
@@ -72,10 +75,11 @@ class RSI(sensors.BaseSensor):
                 data_str = data.decode('utf-8') # store recieved string as str, not byte array
 
                 if data_str != self.sample[0]:
-                    break
 
-            self.sample[:] = data_str
-            self.sample_time[:] = data_time
+                    self.sample[:] = data_str
+                    self.sample_time[:] = data_time
+                    
+                    break
 
             if self.flag_send: 
 

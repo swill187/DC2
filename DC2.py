@@ -13,13 +13,14 @@ import zarr
 
 # DC2 imports
 import DC2_helpers
-import Thermocouple
+import thermocouple
+import robot
 
 # --------------------------------------
 
 logger = DC2_helpers.init_logger(__name__)
 
-sensor_list = [Thermocouple.ThermocoupleDAQ] # list of all sensors we will search for. To use more than one of the same sensor type, add a duplicate to the list
+sensor_list = [thermocouple.ThermocoupleDAQ, robot.RSI] # list of all sensors we will search for. To use more than one of the same sensor type, add a duplicate to the list
         
 class DataCollectionSystem:
     
