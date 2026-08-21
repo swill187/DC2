@@ -61,8 +61,8 @@ class ThermocoupleDAQ(sensors.BaseSensor):
     def sample_sensor(self):
 
         try:
-            self.sample[:] = self.task.read()
-            self.sample_time[:] = time.time_ns()
+            self.sample = self.task.read()
+            self.sample_time = time.time_ns()
             
         except nidaqmx.errors.Error as e:
             logger.critical(f"Error reading thermocouple: {e}")

@@ -15,14 +15,17 @@ class Microphone(sensors.BaseSensor):
 
         self.name = 'Microphone'
         self.acquisition_rate = 48e3
-        self.shape = (1,)
+        self.shape = tuple()
         self.dtype = np.float64
+        self.columns = tuple()
 
         self.pyaudio = pyaudio.PyAudio()
         self.mic_name = mic_name
         self.api_id   = 1
 
         self.mic_index = None
+        self.abs_start_time = None
+        self.local_start_time = None
 
     def detect(self):
 
@@ -30,7 +33,7 @@ class Microphone(sensors.BaseSensor):
 
             mic = self.pyaudio.get_device_info_by_index(i)
 
-            if mic.get('MaxInputChannels') is not None and self.mic_name.lower in mic.get('name', '').lower() and mic.get('hostApi') == self.api_id:
+            if mic.get('maxInputChannels') is not None and self.mic_name.lower() in mic.get('name', '').lower() and mic.get('hostApi') == self.api_id:
                 self.mic_index = i
 
         if self.mic_index is None:
@@ -40,20 +43,25 @@ class Microphone(sensors.BaseSensor):
 
         super(Microphone, self).initialize(zarr_group)
 
-        self.sample       = np.zeros((self.buffer_len, 1), dtype = self.dtype) # sample actually holds a pyaudio buffer, not a single data sample
-        self.sample_time  = np.zeros((self.buffer_len, 1), dtype = np.uint64)
+        try:
+            self.sample       = np.zeros((self.buffer_len, 1), dtype = self.dtype) # sample actually holds a pyaudio buffer, not a single data sample
+            self.sample_time  = np.zeros((self.buffer_len, 1), dtype = np.uint64)
 
-        self.audio_stream = self.pyaudio.open(
-            format = pyaudio.paFloat64,
-            channels = 1,
-            rate = self.acquisition_rate,
-            input = True,
-            frames_per_buffer = self.buffer_len,
-            input_device_index=self.mic_index,
-            stream_callback = self.sample_sensor
-        )
+            self.audio_stream = self.pyaudio.open(
+                format = pyaudio.paFloat32,
+                channels = 1,
+                rate = int(self.acquisition_rate),
+                input = True,
+                frames_per_buffer = self.buffer_len,
+                input_device_index = self.mic_index,
+                stream_callback = self.sample_sensor
+            )
 
-        self.flag_initialized = True
+            self.flag_initialized = True
+            
+        except Exception as e:
+
+            logger.error(f"Error initializing Microphone: {e}")
 
     def collection_thread(self):
 
@@ -61,10 +69,11 @@ class Microphone(sensors.BaseSensor):
             flag_is_collecting = self.flag_is_collecting
 
         self.audio_stream.start_stream() # _audio_callback handles buffer stuff
+        self.abs_start_time = time.time_ns() * 1e-9 # float start time in sec
 
         while flag_is_collecting:
 
-            time.sleep(.5)
+            time.sleep(.5) # give it a rest
 
             with self.lock:
                 flag_is_collecting = self.flag_is_collecting
@@ -73,6 +82,8 @@ class Microphone(sensors.BaseSensor):
 
     def sample_sensor(self, in_data, frame_count, time_info, status):
         """Callback function for audio stream."""
+        
+        stop_time = time.time_ns()
 
         if status:
             logger.error(f"Status: {status}")
@@ -82,13 +93,18 @@ class Microphone(sensors.BaseSensor):
 
         if flag_is_collecting:
             try:
-                sample_time = np.astype(((np.arange(self.len_buffer) * (1 / self.acquisition_rate)) + time_info['inputBufferAdcTime']) * 1e9, np.uint64) # construct timestamps for time based on time that the first sample in a buffer was recieved
-                sample      = np.frombuffer(in_data, dtype=np.float64)
+                
+                if self.local_start_time is None:
+                    self.local_start_time = time_info['input_buffer_adc_time']
+                
+                self.sample_time = np.astype(((np.arange(self.buffer_len) / self.acquisition_rate) + time_info['input_buffer_adc_time'] -self.local_start_time + self.abs_start_time) * 1e9, np.uint64) # construct timestamps for time based on time that the first sample in a buffer was recieved
+                self.sample      = np.frombuffer(in_data, dtype = self.dtype)
 
+                
                 if self.group is not None:
 
-                    self.buffers.put(sample)
-                    self.buffer_times.put(sample_time)
+                    self.buffers.put(self.sample)
+                    self.buffer_times.put(self.sample_time)
                         
             except Exception as e:
                 print(f"Error in {self.name} audio callback: {e}")

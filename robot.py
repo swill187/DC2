@@ -17,8 +17,8 @@ class RSI(sensors.BaseSensor):
 
         self.name             = 'RSI'
         self.acquisition_rate = 100 # Hz
-        self.shape            = (1,) # each sample of the sensor produces 4 values
-        self.columns          = ('json',)
+        self.shape            = tuple()
+        self.columns          = tuple()
         self.dtype            = 'U500'
 
         self.recv_ip   = recv_ip # expected robot IP
@@ -58,7 +58,7 @@ class RSI(sensors.BaseSensor):
 
         except Exception as e:
 
-            logger.error(f"Error initializing ThermocoupleDAQ: {e}")
+            logger.error(f"Error initializing RSI: {e}")
 
     def sample_sensor(self):
 
@@ -74,10 +74,10 @@ class RSI(sensors.BaseSensor):
 
                 data_str = data.decode('utf-8') # store recieved string as str, not byte array
 
-                if data_str != self.sample[0]:
+                if data_str != self.sample:
 
-                    self.sample[:] = data_str
-                    self.sample_time[:] = data_time
+                    self.sample = data_str
+                    self.sample_time = data_time
                     
                     break
 

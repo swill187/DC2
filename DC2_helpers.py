@@ -3,7 +3,8 @@ import pathlib
 import tkinter as tk
 from tkinter import filedialog
 import keyboard
-import time
+from datetime import datetime
+import numpy as np
 
 def init_logger(script_name):
     
@@ -68,11 +69,17 @@ def single_sensor_display(sensor_obj, sensor_args = {}):
         def __init__(self, sensor_args):
             super(printing_sensor, self).__init__(**sensor_args)
 
-        def sample_sensor(self):
+        def sample_sensor(self, *args, **kwargs):
 
-            super(printing_sensor, self).sample_sensor()
+            ret = super(printing_sensor, self).sample_sensor(*args, **kwargs)
+            
+            while not type(self.sample_time) in [np.uint64, int]:
+                self.sample_time = self.sample_time[-1]
+                self.sample      = self.sample[-1]
 
-            print(f'{sensor_obj.__name__}\ttime: {self.sample_time}\tvalue: {self.sample}', end='\r') #, flush=True)
+            print(f'{sensor_obj.__name__}\ttime: {datetime.fromtimestamp(self.sample_time * 1e-9)}\tvalue: {self.sample:<20}', end='\r') # flush=True)
+            
+            return ret
 
 
     logger = logging.getLogger('__main__')
