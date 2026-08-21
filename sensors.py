@@ -6,8 +6,6 @@ import numpy as np
 import queue
 import time
 
-import PySpin
-
 # project imports
 import DC2_helpers
 
@@ -60,6 +58,8 @@ class BaseSensor:
             self.data_chunk = (self.time_chunk[0],) + self.shape
 
         self.buffer_len = min(math.ceil(self.time_chunk[0] / 10), math.ceil(self.acquisition_rate * .5)) # buffer is the lesser of: 10% of a chunk size; amount of data collected in 5 seconds
+
+        self.buffer_len = 2 ** math.floor(np.log2(self.buffer_len)) # lower-bounding power of 2
     
     def initialize(self, zarr_group):
         
@@ -178,53 +178,6 @@ class BaseSensor:
 
         else:
             raise Exception(f"{self.name} is not collecting. It cannot be stopped!")
-
-import pyaudio
-
-class Microphone(BaseSensor):
-
-    def __init__(self, mic_name = '485B39', api_id = 1):
-
-        super(Microphone, self).__init__()
-
-        self.name = 'Microphone'
-        self.acquisition_rate = 48e3
-        self.shape = (1,)
-
-        self.pyaudio = pyaudio.PyAudio()
-        self.mic_name = mic_name
-        self.api_id   = 1
-
-    def detect(self):
-
-        for i in range(self.pyaudio.get_device_count()):
-
-            mic = self.pyaudio.get_device_info_by_index(i)
-
-            if mic.get('MaxInputChannels') > 0 and self.mic_name.lower in mic.get('name', '').lower() and mic.get('hostApi') == self.api_id:
-                self.mic       = mic
-                self.mic_index = i
-
-        if self.mic is None:
-            raise DC2_helpers.SensorNotConnectedError(sensor = self.name)
-
-    def initialize(self, zarr_group):
-
-        super().initialize(zarr_group)
-
-        self.audio_stream = self.pyaudio.open(
-            format = pyaudio.paFloat32,
-            channels = 1,
-            rate = self.acquisition_rate,
-            input = True,
-            frames_per_buffer = self.buffer_len,
-            input_device_index=self.mic_index,
-            stream_callback = self._audio_callback
-        )
-
-        self.flag_initialized = True
-
-        ### TODO: Gonna need some different handling of buffers if pyaudio is natively buffering for us...
 
     
 

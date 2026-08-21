@@ -72,8 +72,7 @@ def single_sensor_display(sensor_obj, sensor_args = {}):
 
             super(printing_sensor, self).sample_sensor()
 
-            with self.lock:
-                print(f'{sensor_obj.__name__}\ttime: {self.sample_time}\tvalue: {self.sample}', end='\r') #, flush=True)
+            print(f'{sensor_obj.__name__}\ttime: {self.sample_time}\tvalue: {self.sample}', end='\r') #, flush=True)
 
 
     logger = logging.getLogger('__main__')
