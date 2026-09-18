@@ -26,7 +26,7 @@ class ThermocoupleDAQ(sensors.BaseSensor):
 
     def detect(self):
 
-        system = nidaqmx.system.System.local()
+        system = nidaqmx.system.System.local() # type: ignore
 
         if self.device_name not in system.devices:
             raise DC2_helpers.SensorNotConnectedError(sensor = self.name)
@@ -45,11 +45,11 @@ class ThermocoupleDAQ(sensors.BaseSensor):
 
                 self.task.ai_channels.add_ai_thrmcpl_chan(channel,
                                                           name_to_assign_to_channel = f"Thermocouple_{i}",
-                                                          thermocouple_type = nidaqmx.constants.ThermocoupleType.K,
-                                                          units = nidaqmx.constants.TemperatureUnits.DEG_C)
+                                                          thermocouple_type = nidaqmx.constants.ThermocoupleType.K, # type: ignore
+                                                          units = nidaqmx.constants.TemperatureUnits.DEG_C) # type: ignore
             
             self.task.timing.cfg_samp_clk_timing(rate = self.acquisition_rate,
-                                                 sample_mode = nidaqmx.constants.AcquisitionType.CONTINUOUS,
+                                                 sample_mode = nidaqmx.constants.AcquisitionType.CONTINUOUS, # type: ignore
                                                  samps_per_chan = 1)
 
             self.flag_initialized = True
@@ -60,15 +60,19 @@ class ThermocoupleDAQ(sensors.BaseSensor):
 
     def sample_sensor(self):
 
+        assert isinstance(self.task, nidaqmx.Task)
+
         try:
             self.sample = self.task.read()
             self.sample_time = time.time_ns()
             
-        except nidaqmx.errors.Error as e:
+        except nidaqmx.errors.Error as e: # type: ignore
             logger.critical(f"Error reading thermocouple: {e}")
 
     def stop_collection(self):
         super().stop_collection()
+
+        assert isinstance(self.task, nidaqmx.Task)
 
         self.task.close()
         self.task = None

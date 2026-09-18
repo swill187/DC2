@@ -1,43 +1,51 @@
-cmake_minimum_required(VERSION 3.10.0)
+cmake_minimum_required(VERSION 3.15...3.27)
+project(DC2)
 
-# Set vcpkg toolchain
-set(CMAKE_TOOLCHAIN_FILE "C:/Users/wwerner4/Documents/code/vcpkg/vcpkg/scripts/buildsystems/vcpkg.cmake" CACHE STRING "")
+if (CMAKE_VERSION VERSION_LESS 3.18)
+  set(DEV_MODULE Development)
+else()
+  set(DEV_MODULE Development.Module)
+endif()
 
-project(DC2 VERSION 0.1.0 LANGUAGES C CXX)
+message(STATUS "C++ Compiler ID: ${CMAKE_CXX_COMPILER_ID}")
+message(STATUS "C++ Compiler Version: ${CMAKE_CXX_COMPILER_VERSION}")
 
-add_executable(LEMBOX ./LemBox/LEMBOX.c)
+if (NOT DataAcqSDK_ROOT)
+    message(FATAL_ERROR
+        "DataAcqSDK_ROOT is not set. Pass -DDataAcqSDK_ROOT=<sdk root> "
+        "or set it in CMakeUserPresets.json.")
+endif()
 
-add_library(OLMEM SHARED IMPORTED)
-set_target_properties(OLMEM PROPERTIES
-    IMPORTED_IMPLIB "C:/Program Files (x86)/Data Translation/Win32/SDK/Lib64/OLMEM64.lib"
-    INTERFACE_INCLUDE_DIRECTORIES "C:/Program Files (x86)/Data Translation/Win32/SDK/Include")
+if (NOT EXISTS "${DataAcqSDK_ROOT}/Include/oldaapi.h")
+    message(FATAL_ERROR "oldaapi.h not found under ${DataAcqSDK_ROOT}")
+endif()
+
+find_package(Python 3.12 COMPONENTS Interpreter ${DEV_MODULE} REQUIRED)
+
+if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "Choose the type of build." FORCE)
+  set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release" "MinSizeRel" "RelWithDebInfo")
+endif()
+
+# Detect the installed nanobind package and import it into CMake
+execute_process(
+  COMMAND "${Python_EXECUTABLE}" -m nanobind --cmake_dir
+  OUTPUT_STRIP_TRAILING_WHITESPACE OUTPUT_VARIABLE nanobind_ROOT)
+find_package(nanobind CONFIG REQUIRED)
 
 add_library(OLDAAPI SHARED IMPORTED)
 set_target_properties(OLDAAPI PROPERTIES
-    IMPORTED_IMPLIB "C:/Program Files (x86)/Data Translation/Win32/SDK/Lib64/oldaapi64.lib"
-    INTERFACE_INCLUDE_DIRECTORIES "C:/Program Files (x86)/Data Translation/Win32/SDK/Include")
+    IMPORTED_IMPLIB     "${DataAcqSDK_ROOT}/lib64/oldaapi64.lib"
+    IMPORTED_LOCATION   "C:/Windows/System32/oldaapi64.dll"
+    INTERFACE_INCLUDE_DIRECTORIES "${DataAcqSDK_ROOT}/Include"
+)
 
-target_link_libraries(LEMBOX OLMEM)
-target_link_libraries(LEMBOX OLDAAPI)
+add_library(OLMEM SHARED IMPORTED)
+set_target_properties(OLMEM PROPERTIES
+    IMPORTED_IMPLIB     "${DataAcqSDK_ROOT}/lib64/OLMEM64.lib"
+    IMPORTED_LOCATION   "C:/Windows/System32/olmem64.dll.dll"
+    INTERFACE_INCLUDE_DIRECTORIES "${DataAcqSDK_ROOT}/Include"
+)
 
-add_executable(XIR1800Collection ./Xiris/XIR-1800Collection.cpp)
-
-add_library(WELDSDK SHARED IMPORTED)
-set_target_properties(WELDSDK PROPERTIES
-    IMPORTED_IMPLIB "C:/Program Files/Xiris Automation Inc/Xiris WeldSDK 2/lib/WeldSDK.lib"
-    INTERFACE_INCLUDE_DIRECTORIES "C:/Program Files/Xiris Automation Inc/Xiris WeldSDK 2/include;C:/Program Files/Xiris Automation Inc/Xiris WeldSDK 2/Samples/C++ Sample Projects/00_Common/include")
-
-target_include_directories(XIR1800Collection PRIVATE 
-    "C:/Program Files/Xiris Automation Inc/Xiris WeldSDK 2/include"
-    "C:/Program Files/Xiris Automation Inc/Xiris WeldSDK 2/Samples/C++ Sample Projects/00_Common/include")
-
-target_link_libraries(XIR1800Collection WELDSDK)
-
-# FFmpeg libraries from vcpkg
-set(FFMPEG_INSTALL_DIR "C:/Users/wwerner4/Documents/code/vcpkg/vcpkg/installed/x64-windows")
-target_include_directories(XIR1800Collection PRIVATE "${FFMPEG_INSTALL_DIR}/include")
-target_link_directories(XIR1800Collection PRIVATE "${FFMPEG_INSTALL_DIR}/lib")
-target_link_libraries(XIR1800Collection avutil avcodec avformat swscale)
-
-
-
+nanobind_add_module(lembox STABLE_ABI NB_STATIC lembox.cpp)
+target_link_libraries(lembox PRIVATE OLDAAPI OLMEM)

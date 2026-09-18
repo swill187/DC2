@@ -64,23 +64,39 @@ def select_folder(title='Select Build Folder'):
 
 def single_sensor_display(sensor_obj, sensor_args = {}):
 
+    import sensors
+
     class printing_sensor(sensor_obj):
 
         def __init__(self, sensor_args):
             super(printing_sensor, self).__init__(**sensor_args)
 
-        def sample_sensor(self, *args, **kwargs):
+        if issubclass(sensor_obj.__class__, sensors.BufferedSensor):
+            def sample_sensor(self, *args, **kwargs):
 
-            ret = super(printing_sensor, self).sample_sensor(*args, **kwargs)
-            
-            while not type(self.sample_time) in [np.uint64, int]:
-                self.sample_time = self.sample_time[-1]
-                self.sample      = self.sample[-1]
+                ret = super(printing_sensor, self).sample_sensor(*args, **kwargs)
 
-            print(f'{sensor_obj.__name__}\ttime: {datetime.fromtimestamp(self.sample_time * 1e-9)}\tvalue: {self.sample:<20}', end='\r') # flush=True)
-            
-            return ret
+                # while self.buffer_time holds a list of samples, index another layer into self.buffer / self.buffer_time
+                while not type(self.buffer_time) in [np.uint64, int]:
+                    self.buffer_time = self.buffer_time[-1]
+                    self.buffer      = self.buffer[-1]
 
+                print(f'{sensor_obj.__name__}\ttime: {datetime.fromtimestamp(self.sample_time * 1e-9)}\tvalue: {self.sample:<20}', end='\r') # flush=True)
+                
+                return ret
+
+        else:
+            def sample_sensor(self, *args, **kwargs):
+
+                ret = super(printing_sensor, self).sample_sensor(*args, **kwargs)
+                
+                while not type(self.sample_time) in [np.uint64, int]:
+                    self.sample_time = self.sample_time[-1]
+                    self.sample      = self.sample[-1]
+
+                print(f'{sensor_obj.__name__}\ttime: {datetime.fromtimestamp(self.sample_time * 1e-9)}\tvalue: {self.sample:<20}', end='\r') # flush=True)
+                
+                return ret
 
     logger = logging.getLogger('__main__')
     sensor = printing_sensor(sensor_args)
