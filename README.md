@@ -33,3 +33,11 @@ To install DC2 on your machine, first clone the DC2 repository to your computer.
 ## Python Virtual Environment
     1. If using the FLIR camera, copy the "spinnaker_python" *.whl file into the DC2/.setup/ directory. Otherwise, remove the "spinnaker_python" line from DC2/.setup/requirements.txt
     2. create a new virtual environment in VS Code (press F1 -> "Python: Create Environment..." -> ".venv" -> "python 3.10.11" -> "setup/requirements.txt")
+
+## NEW CMAKE COMMANDS
+
+    Remove-Item -Recurse -Force .out
+    cmake --preset def
+    cmake --build --preset def-release --clean-first
+
+
