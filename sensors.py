@@ -62,8 +62,9 @@ class BaseSensor:
             self.data_chunk = self.time_chunk + self.shape
 
         self.buffer_len = min(math.ceil(self.time_chunk[0] / 10), math.ceil(self.acquisition_rate * .5)) # buffer is the lesser of: 10% of a chunk size; amount of data collected in 5 seconds
-
         self.buffer_len = 2 ** math.floor(np.log2(self.buffer_len)) # lower-bounding power of 2
+
+        logger.info(f'time_chunk: {self.time_chunk}\ndata_chunk: {self.data_chunk}\nbuffer_len: {self.buffer_len}')
     
     def initialize(self, zarr_group = None):
         
@@ -215,56 +216,6 @@ class BufferedSensor(BaseSensor):
         return
 
 #class XIR1800(BaseSensor):
-
-import sys
-
-sys.path.insert(0, ".out/build/def/Release")
-import lembox
-
-class LEMBox(BufferedSensor):
-
-    def __init__(self):
-
-        super(LEMBox, self).__init__()
-
-        self.name = 'LEMBox'
-        self.acquisition_rate = 20e3
-        self.shape = (2,)
-        self.dtype = np.float64
-        self.columns = ('Voltage(V)_Current(A)')
-
-        self.flag_connected = False
-
-    def detect(self):
-
-        [flag_detected, msg] = lembox.initializeBoard()
-
-        if not flag_detected:
-
-            raise DC2_helpers.SensorNotConnectedError(f"{self.name} failed to connect: {msg}")
-
-        else:
-
-            self.flag_connected = flag_detected
-
-    def initialize(self, zarr_group):
-
-        super(LEMBox, self).initialize(zarr_group)
-
-        lembox.initializeBoard()
-
-
-        self.flag_initialized = True #TODO: make flag_initialized a decorator for initialize
-
-    def sample_sensor(self):
-
-        return super().sample_sensor()
-
-    def __del__(self):
-
-        if self.flag_connected:
-            lembox.terminateBoard()
-
 
     
 

@@ -102,14 +102,14 @@ class Microphone(sensors.BufferedSensor):
                     self.local_start_time = time_info['input_buffer_adc_time']
 
                 # construct timestamps for time based on time that the first sample in a buffer was recieved
-                buffer_time = np.astype(((np.arange(self.buffer_len) / self.acquisition_rate) + time_info['input_buffer_adc_time'] - self.local_start_time + self.abs_start_time) * 1e9, np.uint64) # type: ignore
+                self.buffer_time = np.astype(((np.arange(self.buffer_len) / self.acquisition_rate) + time_info['input_buffer_adc_time'] - self.local_start_time + self.abs_start_time) * 1e9, np.uint64) # type: ignore
                 self.buffer = np.frombuffer(in_data, dtype = self.dtype)
 
                 
                 if self.group is not None:
 
-                    self.buffers.put(buffer)
-                    self.buffer_times.put(buffer_time)
+                    self.buffers.put(self.buffer)
+                    self.buffer_times.put(self.buffer_time)
                         
             except Exception as e:
                 print(f"Error in {self.name} audio callback: {e}")

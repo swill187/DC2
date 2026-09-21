@@ -59,7 +59,7 @@ class DataCollectionSystem:
         
         self.output_path = DC2_helpers.select_folder() / (self.file_prefix + datetime.now().strftime('%Y%m%d_%H%M%S') + '.zarr')
         
-        store = zarr.storage.LocalStore(self.output_path)
+        store = zarr.storage.LocalStore(self.output_path) # type: ignore
         self.zarr_root = zarr.group(store=store)
         
         for sensor in self.sensors:

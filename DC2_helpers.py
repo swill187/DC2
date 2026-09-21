@@ -54,7 +54,7 @@ def select_folder(title='Select Build Folder'):
     root.wm_attributes('-topmost', 1)
     root.withdraw()
 
-    path = tk.filedialog.askdirectory(
+    path = tk.filedialog.askdirectory( # type: ignore
         title=title,
         initialdir = init_dir,
         parent=root
