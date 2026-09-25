@@ -16,8 +16,18 @@ if (NOT DataAcqSDK_ROOT)
         "or set it in CMakeUserPresets.json.")
 endif()
 
+if (NOT XirisWeldSDK_ROOT)
+    message(FATAL_ERROR
+        "XirisWeldSDK_ROOT is not set. Pass -DXirisWeldSDK_ROOT=<sdk root> "
+        "or set it in CMakeUserPresets.json.")
+endif()
+
 if (NOT EXISTS "${DataAcqSDK_ROOT}/Include/oldaapi.h")
     message(FATAL_ERROR "oldaapi.h not found under ${DataAcqSDK_ROOT}")
+endif()
+
+if (NOT EXISTS "${XirisWeldSDK_ROOT}/include/WeldSDK")
+    message(FATAL_ERROR "WeldSDK not found under ${XirisWeldSDK_ROOT}")
 endif()
 
 find_package(Python 3.12 COMPONENTS Interpreter ${DEV_MODULE} REQUIRED)
@@ -47,5 +57,22 @@ set_target_properties(OLMEM PROPERTIES
     INTERFACE_INCLUDE_DIRECTORIES "${DataAcqSDK_ROOT}/Include"
 )
 
+add_library(WeldSDK SHARED IMPORTED)
+set_target_properties(WeldSDK PROPERTIES
+    IMPORTED_IMPLIB "${XirisWeldSDK_ROOT}/lib/WeldSDK.lib"
+    IMPORTED_LOCATION "${XirisWeldSDK_ROOT}/bin/WeldSDK.dll"
+    INTERFACE_INCLUDE_DIRECTORIES "${XirisWeldSDK_ROOT}/include"
+)
+
+add_library(XAudioSDK SHARED IMPORTED)
+set_target_properties(XAudioSDK PROPERTIES
+    IMPORTED_IMPLIB "${XirisWeldSDK_ROOT}/lib/XAudioSDK.lib"
+    IMPORTED_LOCATION "${XirisWeldSDK_ROOT}/bin/XAudioSDK.dll"
+    INTERFACE_INCLUDE_DIRECTORIES "${XirisWeldSDK_ROOT}/include"
+)
+
 nanobind_add_module(lembox STABLE_ABI NB_STATIC lembox.cpp)
 target_link_libraries(lembox PRIVATE OLDAAPI OLMEM)
+
+nanobind_add_module(xiris STABLE_ABI NB_STATIC xiris.cpp)
+target_link_libraries(xiris PRIVATE WeldSDK XAudioSDK)
