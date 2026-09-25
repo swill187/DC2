@@ -21,6 +21,7 @@ class MyXirisCamera:
         WeldSDK::CameraClass cameraType;
         bool recordRaw;
         bool recordPng;
+        bool isReady;
 
     public: 
 
@@ -47,18 +48,38 @@ class MyXirisCamera:
         }
 
         virtual void OnCameraReady(WeldSDK::CameraReadyEventArgs args) override {
+
+            isReady = true;
+
             return;
         }
 
         virtual void OnStreamingStateChanged(WeldSDK::CameraStreamingEventArgs args) override {
+
+            if (args.IsStreaming) {
+                if (args.IsPaused) {
+                    std::cout << "Camera " << ipAddress << " is paused.\n";
+                }
+                else {
+                    std::cout << "Camera " << ipAddress << " is streaming.\n";
+                }
+            }
+            else {
+                std::cout << "Camera " << ipAddress << " is stopped.\n";
+            }
+
             return;
         }
 
         virtual void OnBufferReady(WeldSDK::BufferReadyEventArgs args) override {
+            
+
             return;
         }
         
         virtual void OnTraceMessage(WeldSDK::TraceMessageEventArgs args) override {
+
+            std::cout << "Camera " << ipAddress << " Message: " << args.Message << "\n";
             return;
         }
 
@@ -170,7 +191,8 @@ std::pair<bool, std::string> XirisStartRecording() {
         msg = "Camera already recording!";
         return std::make_pair(false, msg);
     } else {
-        camera->isRecording = true
+        camera->isRecording = true;
+        camera->Start();
 
     }
 
