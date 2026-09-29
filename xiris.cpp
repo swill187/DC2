@@ -3,13 +3,55 @@
 #include <nanobind/stl/pair.h>
 
 #include <string>
+#include <queue>
+#include <vector>
 #include <mutex>
 
+#include <windows.h>
 #include "WeldSDK/WeldCamera.h"
 #include "WeldSDK/CameraDetector.h"
+#include "XImageLib/Image/CRawImage.h"
 
 namespace nb = nanobind;
 using namespace nb::literals;
+
+#define EPOCH_DIFF_100NS 116444736000000000ULL // number of 100NS between FILETIME and unix time starts
+
+// we need a special thread-safe queue type because we will be reading from MyXirisCamera's frameBuffer queue in this thread while the SDK writes to the queue
+template <typename T>
+class ThreadSafeQueue {
+    private:
+        std::queue<T> q;
+        std::mutex mtx;
+        std::condition_variable cv;
+
+    public:
+
+        ThreadSafeQueue() {}
+
+        bool empty() {
+
+            std::lock_guard<std::mutex> lock(mtx);
+            return q.empty();
+        }
+
+        T pop() {
+
+            std::unique_lock<std::mutex> lock(mtx);
+
+            cv.wait_for(lock, std::chrono::milliseconds(250), [this] { return !q.empty(); });
+            T val = std::move(q.front());
+            q.pop();
+
+            return val;
+        }
+
+        void push(T element) {
+
+            std::lock_guard<std::mutex> lock(mtx);
+            q.push(std::move(element));
+        }
+};
 
 class MyXirisCamera:
     // multiple inheritance. MyXirisCamera is a child of both WeldCamera and CameraEventSink
@@ -19,34 +61,34 @@ class MyXirisCamera:
 
     private:
         WeldSDK::CameraClass cameraType;
-        bool recordRaw;
-        bool recordPng;
         bool isReady;
 
     public: 
 
         std::string ipAddress;
         bool isRecording = false;
+        ThreadSafeQueue<std::pair<ULONGLONG, std::vector<std::byte>>> frameBuffer;
 
         MyXirisCamera(const std::string ip, WeldSDK::CameraClass type = WeldSDK::CameraClass::XVT1800, bool recordRaw = true, bool recordPng = false):
             WeldSDK::WeldCamera(),
             ipAddress(ip),
-            cameraType(type),
-            recordRaw(recordRaw),
-            recordPng(recordPng)
+            cameraType(type)
         {
-            AttachEventSink(this);
+            AttachEventSink(this); // events from the connected camera are handled by MyXirisCamera's callback functions
         }
 
+        // deconstructor kills event sink thread
         virtual ~MyXirisCamera() {
 
             DetachEventSink(this);
         }
 
+        // hide Connect's arguments under the hood
         bool ConnectCamera() {
             return Connect(ipAddress, cameraType);
         }
 
+        // set a flag once the camera is connected and ready to start recording
         virtual void OnCameraReady(WeldSDK::CameraReadyEventArgs args) override {
 
             isReady = true;
@@ -54,6 +96,7 @@ class MyXirisCamera:
             return;
         }
 
+        // leftover from older version. Do we ever change streaming state
         virtual void OnStreamingStateChanged(WeldSDK::CameraStreamingEventArgs args) override {
 
             if (args.IsStreaming) {
@@ -71,12 +114,38 @@ class MyXirisCamera:
             return;
         }
 
+        // what we do when a new frame is collected
         virtual void OnBufferReady(WeldSDK::BufferReadyEventArgs args) override {
-            
+
+            if (isRecording) {
+                try {
+                    FILETIME frame_time;
+                    GetSystemTimePreciseAsFileTime(&frame_time);
+
+                    ULONGLONG frame_time_100ns = ((ULONGLONG)frame_time.dwHighDateTime << 32) | frame_time.dwLowDateTime;
+                    ULONGLONG frame_time_ns = (frame_time_100ns - EPOCH_DIFF_100NS) * 100; // start time in DC2 format
+                    
+                    // image in args becomes CRawImage
+                    XImageLib::CRawImage img(*args.RawImage);
+
+                    // initialize a vector of bytes of correct size ot hold the image we found
+                    std::vector<std::byte> bytes(sizeof(XImageLib::CRawImage));
+
+                    // copy our image into the byte array
+                    std::memcpy(bytes.data(), &img, sizeof(XImageLib::CRawImage));
+
+                    // stick our image into the frame queue
+                    frameBuffer.push(std::make_pair(frame_time_ns, bytes));
+                } 
+                catch (const std::exception& e) {
+                    printf("Error saving frame: %s", (char*)e.what());
+                }
+            }
 
             return;
         }
         
+        // is this ever used?
         virtual void OnTraceMessage(WeldSDK::TraceMessageEventArgs args) override {
 
             std::cout << "Camera " << ipAddress << " Message: " << args.Message << "\n";
@@ -123,13 +192,13 @@ class SimpleDetector: public WeldSDK::CameraDetectorEventSink {
         }
 
         // callable detection function. returns ip address of camera
-        std::string DetectCamera() {
+        std::string DetectCamera(int timeout) {
 
             // lock forces this function to wait until a camera is detected
             std::unique_lock<std::mutex> lk(cameraMtx);
 
             waitForCameraCv.wait_for(lk, 
-                                     std::chrono::seconds(10),
+                                     std::chrono::seconds(timeout),
                                      [this] { return camera != nullptr; }
                                     ); // wait until lambda function returns true, or timeout is reached
             lk.unlock();
@@ -143,19 +212,22 @@ class SimpleDetector: public WeldSDK::CameraDetectorEventSink {
         }
 };
 
-// entry point (is this the right term?) for nanobind to use SimpleDetector
-std::string DetectXirisCamera() {
+// entry point (is this the right term?) for nanobind to use SimpleDetector. Discovers a camera' ip
+std::string DetectXirisCamera(int timeout = 10) {
     SimpleDetector* detector = new SimpleDetector(WeldSDK::CameraClass::XVT1800);
 
-    std::string ip = detector->DetectCamera();
+    std::string ip = detector->DetectCamera(timeout);
 
     delete detector;
     return ip;
 }
 
+// library holds constant reference to a camera object internally
 std::shared_ptr<MyXirisCamera> camera;
 
-std::pair<bool, std::string> InitXirisCamera(std::string ipAddress) {
+// need buffer initialization for storing recorded frames!!!!!!!!!
+// connect to camera and set user's desired settings.
+std::pair<bool, std::string> InitXirisCamera(std::string ipAddress, float frame_rate = -1) {
     std::string msg = "";
 
     camera = std::make_shared<MyXirisCamera>(ipAddress);
@@ -164,26 +236,72 @@ std::pair<bool, std::string> InitXirisCamera(std::string ipAddress) {
     if (!camera->ConnectCamera()) {
 
         msg = "Camera connection failed";
-        return std::make_pair(false, msg);
     }
 
+    /*
     // immediately pause the camera stream. We don't want to fill tons of buffers before real data collection starts
     if (!camera->Pause()) {
 
         msg = "Camera Pause on init failed";
-        return std::make_pair(false, msg);
     }
+    */ 
 
     // set frame count to 0. Unclear if this will increment during the pause (same frame is still streamed). TODO: investigate
     if (!camera->ResetFrameCounter()) {
 
         msg = "Camera frame counter reset on init failed";
-        return std::make_pair(false, msg);
     }
 
-    return std::make_pair(true, msg);
+    if (!camera->setPixelDepth(WeldSDK::PixelDepths::Bpp14)) {
+
+        msg = "Camera pixel depth setting failed";
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    if (!camera->setFFCEnabled(true)) {
+
+        msg = "Camera set flat field correction failed";
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    if (!camera->setShutterMode(WeldSDK::ShutterModes::Global)) {
+
+        msg = "Camera set shutter mode failed";
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    if (!camera->setAutoGainMode(WeldSDK::AutoControlModes::Continuous)) {
+
+        msg = "Camera set auto gain mode failed";
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    if (frame_rate == -1.) {
+        if (!camera->setGSFrameRateLimitEnabled(false)) {
+
+            msg = "Camera set unlimited frame rate failed";
+        }
+    } else {
+
+        if (!camera->setGSFrameRateLimit(frame_rate)) {
+
+            msg = "Camera set frame rate limit failed";
+        }
+    }
+
+    if (msg != "") {
+        return std::make_pair(false, msg);
+    } else {
+        return std::make_pair(true, msg);
+    }
+
 }
 
+// start the camera recording. do we need a global start timestamp here?
 std::pair<bool, std::string> XirisStartRecording() {
     std::string msg = "";
 
@@ -199,7 +317,40 @@ std::pair<bool, std::string> XirisStartRecording() {
     return std::make_pair(true, msg);
 }
 
+std::pair<ULONGLONG, std::vector<std::byte>> XirisGetFrame() {
+
+    if (!camera->frameBuffer.empty()) {
+        return camera->frameBuffer.pop();
+    } else {
+
+        std::vector<std::byte> empty_vector;
+        return std::make_pair(0, empty_vector);
+    }
+}
+
+bool XirisStopRecording() {
+
+    camera->BeginStop();
+    return camera->WaitForStopComplete();
+
+}
+
+bool XirisFrameBufferEmpty() {
+
+    return camera->frameBuffer.empty();
+}
+
+void XirisDeleteCamera() {
+    delete &camera;
+}
+
+// define python bindings
 NB_MODULE(xiris, m) {
-    m.def("detectCamera", &DetectXirisCamera);
-    m.def("initCamera", &InitXirisCamera, "ipAddress"_a);
+    m.def("detectCamera", &DetectXirisCamera, "timeout"_a = 10);
+    m.def("initCamera", &InitXirisCamera, "ipAddress"_a, "frame_rate"_a = -1);
+    m.def("startCamera", &XirisStartRecording);
+    m.def("sampleCamera", &XirisGetFrame);
+    m.def("stopCamera", &XirisStopRecording);
+    m.def("cameraBufferIsEmpty", &XirisFrameBufferEmpty);
+    m.def("deleteCamera", &XirisDeleteCamera);
 }

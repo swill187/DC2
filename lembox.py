@@ -48,6 +48,8 @@ class LEMBox(sensors.BufferedSensor):
 
         self.last_time = lembox.startCollection() # type: ignore
 
+        self.timestep = 1 / self.acquisition_rate * 1e9
+
         if self.last_time == -1:
             raise Exception("Error starting LEMBox collection")
 
@@ -58,7 +60,7 @@ class LEMBox(sensors.BufferedSensor):
     def sample_sensor(self):
 
         self.buffer = lembox.sampleBuffer() # type: ignore
-        self.buffer_time = np.astype(((np.arange(len(self.buffer[0])) / self.acquisition_rate) * 1e9) + self.last_time, np.uint64)
+        self.buffer_time = np.astype(((np.arange(len(self.buffer[0])) / self.acquisition_rate) * 1e9) + self.last_time + self.timestep, np.uint64)
 
         self.last_time = self.buffer_time[-1]
 
